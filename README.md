@@ -1,6 +1,32 @@
-# REST_core
+# ledger-api
 
-可複用的核心後端：以 Django REST Framework + SimpleJWT 實作帳號／認證 API（註冊、登入、登出、JWT 管理、使用者查詢），主鍵採 UUIDv7。設計為未來各專案的起點。本文件說明如何用 Docker 在本機跑起來、以及如何部署到單一 Linux VM 並啟用 HTTPS。
+記帳 REST API 作品：以 Django REST Framework + SimpleJWT 打底的後端服務。
+
+目前已完成**帳號與認證核心**（註冊、登入、登出、JWT 管理、使用者查詢）；**記帳領域**（帳戶、分類、交易、標籤）為進行中的下一階段。本文件說明如何用 Docker 在本機跑起來、如何在本機直接開發，以及如何部署到單一 Linux VM 並啟用 HTTPS。
+
+---
+
+## 技術棧
+
+- **Python 3.12** · **Django 6.0.3** · **Django REST Framework 3.17**
+- **SimpleJWT 5.5** — access / refresh token，含黑名單與輪換
+- **PostgreSQL 16**（psycopg3）；設定全走環境變數（`python-decouple` + `dj-database-url`）
+- **CustomUser** — 以 email 登入、UUIDv7 主鍵、`role` 欄位
+- **Gunicorn** + **WhiteNoise**（靜態檔）
+- **Docker** 多階段建置 + **docker-compose**（db / web；nginx + certbot 走 TLS profile）
+- 開發工具：**Ruff**（lint + format）、**coverage**
+
+## 目前功能
+
+| 範疇       | 內容                                            |
+|----------|-----------------------------------------------|
+| 註冊       | 建立帳號，成功直接回傳使用者資料與 JWT                         |
+| 登入       | email + 密碼換取 access / refresh token（回應含 user） |
+| 登出       | 將 refresh token 加入黑名單                         |
+| Token 管理 | refresh（輪換）、verify                            |
+| 使用者      | 列表、查詢、（管理者）更新                                 |
+
+完整路由見下方 [API 端點](#api-端點)。
 
 ---
 
@@ -10,8 +36,8 @@
 
 ```bash
 # 1) 取得專案
-git clone <repo-url> rest_core
-cd rest_core
+git clone <repo-url> ledger-api
+cd ledger-api
 
 # 2) 準備環境變數
 cp .env.example .env
@@ -27,7 +53,9 @@ cp .env.example .env
   docker run --rm python:3.12-slim python -c "import secrets; print(secrets.token_urlsafe(64))"
   ```
 - **`POSTGRES_PASSWORD`** — Postgres 密碼，請改成非預設值
-- **`DJANGO_SUPERUSER_PASSWORD`** — 自動建立的 admin 密碼（若三個 `DJANGO_SUPERUSER_*` 都填了，容器首次啟動會由 `manage.py ensure_superuser` 建立帳號，並設定 `role='admin'` + `is_staff` + `is_superuser`；已存在的使用者會被冪等地補齊三個旗標，但密碼不會被覆蓋）
+- **`DJANGO_SUPERUSER_PASSWORD`** — 自動建立的 admin 密碼（若三個 `DJANGO_SUPERUSER_*`
+  都填了，容器首次啟動會由 `manage.py ensure_superuser` 建立帳號，並設定 `role='admin'` + `is_staff` + `is_superuser`
+  ；已存在的使用者會被冪等地補齊三個旗標，但密碼不會被覆蓋）
 
 ```bash
 # 3) 啟動（首次會 build image，約 2–3 分鐘）
@@ -53,6 +81,105 @@ docker compose down -v    # 連 volume 一起刪（DB 清空）
 
 ---
 
+## API 端點
+
+所有認證端點掛在 `/api/auth/` 底下。
+
+| Method  | 路徑                           | 權限              | 說明                                             |
+|---------|------------------------------|-----------------|------------------------------------------------|
+| `POST`  | `/api/auth/register/`        | AllowAny        | 註冊；成功回 user + tokens（`201`；email 或帳號重複回 `409`） |
+| `POST`  | `/api/auth/login/`           | AllowAny        | email + password 換 access / refresh（回應含 user）  |
+| `POST`  | `/api/auth/logout/`          | IsAuthenticated | 將 refresh token 加入黑名單                          |
+| `POST`  | `/api/auth/token/refresh/`   | AllowAny        | 以 refresh 換新 access（輪換 refresh）                |
+| `POST`  | `/api/auth/token/verify/`    | AllowAny        | 驗證 token 是否有效                                  |
+| `GET`   | `/api/auth/users/`           | IsAuthenticated | 使用者列表                                          |
+| `GET`   | `/api/auth/users/<uuid:pk>/` | IsAuthenticated | 取得單一使用者                                        |
+| `PATCH` | `/api/auth/users/<uuid:pk>/` | IsAdminUser     | 更新使用者欄位                                        |
+
+需登入的端點走 `Authorization: Bearer <access>` 標頭。
+
+註冊範例：
+
+```bash
+curl -X POST http://localhost:8000/api/auth/register/ \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "newuser",
+    "email": "new@example.com",
+    "password": "password123",
+    "password_confirm": "password123",
+    "phone": "0912345678"
+  }'
+```
+
+登入範例：
+
+```bash
+curl -X POST http://localhost:8000/api/auth/login/ \
+  -H "Content-Type: application/json" \
+  -d '{"email": "new@example.com", "password": "password123"}'
+```
+
+---
+
+## 本機開發（不經 Docker）
+
+適合只想跑 Django、不想每次都 build image 的情境。需求：本機 Python 3.12，以及一個可連的 PostgreSQL。
+
+```bash
+# 1) 建立虛擬環境並安裝依賴
+python -m venv .venv
+.venv\Scripts\Activate.ps1            # PowerShell（macOS／Linux 用 source .venv/bin/activate）
+pip install -r requirements-dev.txt   # 一併裝好 runtime 與開發工具（ruff、coverage）
+
+# 2) 提供 DATABASE_URL
+# settings.py 直接讀 DATABASE_URL。Docker 下由 compose 自動組好注入；
+# 本機（非 Docker）需自行指向你的 Postgres。
+# PowerShell：
+$env:DATABASE_URL = "postgres://ledger:<password>@localhost:5432/ledger"
+# bash：
+# export DATABASE_URL="postgres://ledger:<password>@localhost:5432/ledger"
+
+# 3) 套用 migration、跑測試、啟動
+python manage.py migrate
+python manage.py test                 # 跑測試（Django 內建 runner）
+python manage.py runserver            # http://127.0.0.1:8000/
+```
+
+> `SECRET_KEY`、`DEBUG`、`ALLOWED_HOSTS` 會由 `.env` 自動讀入（`python-decouple`）；只有 `DATABASE_URL` 要自己給（Docker 下才由 compose 組好注入）。
+>
+> ⚠️ 本專案的 `docker compose up -d db` **不會把 5432 對外開放**（只有 `web` 服務設了 `ports`），所以本機 venv **連不到** compose 那顆 db。要在本機跑，請另起一顆有對外開埠的 Postgres，最省事是拋棄式容器：
+>
+> ```bash
+> docker run -d --rm --name ledger-db -p 5432:5432 -e POSTGRES_USER=ledger -e POSTGRES_PASSWORD=devpass -e POSTGRES_DB=ledger postgres:16-alpine
+> ```
+>
+> 接著把上面 2) 的 `DATABASE_URL` 密碼填成 `devpass`；用完 `docker stop ledger-db`（`--rm` 會自動刪）。若 5432 已被占用，改 `-p 5433:5432` 並把 `DATABASE_URL` 的埠改 5433。只想跑測試而不想碰本機 DB，可改在容器內跑（見〈程式品質：Lint、格式化與覆蓋率〉一節）。
+
+---
+
+## 程式品質：Lint、格式化與覆蓋率
+
+開發工具設定集中在 `pyproject.toml`（`[tool.ruff]`、`[tool.coverage]`）。這些工具屬 `requirements-dev.txt`，**不在 runtime image 內**，請在本機 venv 執行。
+
+```bash
+ruff check .                                   # lint（規則集 E / F / I / UP）
+ruff check . --fix                             # 自動修可修的
+ruff format .                                  # 格式化（維持單引號風格）
+
+coverage run manage.py test                    # 跑測試並蒐集覆蓋率（需 DATABASE_URL）
+coverage report                                # 文字報表（涵蓋 accounts、config）
+coverage html                                  # 產生 htmlcov/index.html，瀏覽器逐行檢視
+```
+
+容器內若只想跑測試（runtime image 不含覆蓋率工具，改用 Django 內建 runner）：
+
+```bash
+docker compose exec web python manage.py test accounts
+```
+
+---
+
 ## 啟用 TLS（部署到 Linux VM）
 
 前置條件：
@@ -64,7 +191,8 @@ docker compose down -v    # 連 volume 一起刪（DB 清空）
 
 ### 首次取得憑證（一次性 bootstrap）
 
-nginx 需要 cert 才能啟動，cert 又需要 nginx 對外服務 ACME challenge 才拿得到。所以首次需要先放一張臨時自簽 cert 給 nginx 用，再讓 certbot 換成真實 Let's Encrypt cert。
+nginx 需要 cert 才能啟動，cert 又需要 nginx 對外服務 ACME challenge 才拿得到。所以首次需要先放一張臨時自簽 cert 給 nginx
+用，再讓 certbot 換成真實 Let's Encrypt cert。
 
 ```bash
 # Step 1: 讀入 .env，準備變數
@@ -146,24 +274,25 @@ docker compose --profile tls logs certbot --tail 50
 
 ## 環境變數對照表
 
-| 變數 | 必填 | 預設 | 用途 |
-|---|---|---|---|
-| `SECRET_KEY` | ✅ | 無 | Django 加密金鑰，缺值會啟動失敗 |
-| `DEBUG` | ✅ | — | `True`/`False`；正式環境必設 `False` |
-| `ALLOWED_HOSTS` | ✅ | `localhost,127.0.0.1` | 逗號分隔；正式環境加入你的網域 |
-| `POSTGRES_USER` | ✅ | `restcore` | Postgres 帳號 |
-| `POSTGRES_PASSWORD` | ✅ | placeholder | Postgres 密碼，**請改強密碼** |
-| `POSTGRES_DB` | ✅ | `restcore` | Postgres 資料庫名 |
-| `DB_HOST` | ✅ | `db` | 與 compose service 名一致；外部 DB 改這 |
-| `DB_PORT` | ✅ | `5432` | DB 埠 |
-| `WEB_PORT` | — | `8000` | 主機端對外的 web port，容器內固定 8000 |
-| `DJANGO_SUPERUSER_USERNAME` | — | `admin` | 三個都填才會在容器啟動時自動建 superuser |
-| `DJANGO_SUPERUSER_EMAIL` | — | — | 同上 |
-| `DJANGO_SUPERUSER_PASSWORD` | — | — | 同上 |
-| `DOMAIN_NAME` | TLS 必填 | `example.com` | 公開網域，nginx 與 certbot 共用 |
-| `CERTBOT_EMAIL` | TLS 必填 | — | Let's Encrypt 通知信箱 |
+| 變數                          | 必填     | 預設                    | 用途                             |
+|-----------------------------|--------|-----------------------|--------------------------------|
+| `SECRET_KEY`                | ✅      | 無                     | Django 加密金鑰，缺值會啟動失敗            |
+| `DEBUG`                     | ✅      | —                     | `True`/`False`；正式環境必設 `False`  |
+| `ALLOWED_HOSTS`             | ✅      | `localhost,127.0.0.1` | 逗號分隔；正式環境加入你的網域                |
+| `POSTGRES_USER`             | ✅      | `ledger`              | Postgres 帳號                    |
+| `POSTGRES_PASSWORD`         | ✅      | placeholder           | Postgres 密碼，**請改強密碼**          |
+| `POSTGRES_DB`               | ✅      | `ledger`              | Postgres 資料庫名                  |
+| `DB_HOST`                   | ✅      | `db`                  | 與 compose service 名一致；外部 DB 改這 |
+| `DB_PORT`                   | ✅      | `5432`                | DB 埠                           |
+| `WEB_PORT`                  | —      | `8000`                | 主機端對外的 web port，容器內固定 8000     |
+| `DJANGO_SUPERUSER_USERNAME` | —      | `admin`               | 三個都填才會在容器啟動時自動建 superuser      |
+| `DJANGO_SUPERUSER_EMAIL`    | —      | —                     | 同上                             |
+| `DJANGO_SUPERUSER_PASSWORD` | —      | —                     | 同上                             |
+| `DOMAIN_NAME`               | TLS 必填 | `example.com`         | 公開網域，nginx 與 certbot 共用        |
+| `CERTBOT_EMAIL`             | TLS 必填 | —                     | Let's Encrypt 通知信箱             |
 
-`DATABASE_URL` 不需要手動設；compose 會從 `POSTGRES_*` 與 `DB_*` 組合後注入 web 容器。
+`DATABASE_URL` 在 Docker 下不需手動設；compose 會從 `POSTGRES_*` 與 `DB_*` 組合後注入 web 容器。只有本機（非
+Docker）開發時才需自行提供（見 [本機開發](#本機開發不經-docker)）。
 
 ---
 
@@ -172,8 +301,8 @@ docker compose --profile tls logs certbot --tail 50
 ### db 容器 unhealthy／`dependency failed to start: container ... is unhealthy`
 
 ```text
-✘ Container rest_core-db-1  Error
-dependency failed to start: container rest_core-db-1 is unhealthy
+✘ Container ledger-api-db-1  Error
+dependency failed to start: container ledger-api-db-1 is unhealthy
 ```
 
 `docker compose logs db` 若看到：
@@ -203,9 +332,11 @@ docker compose up -d --build
 
 可能原因：
 
-1. `db` 容器還沒 healthy 就被 web 試圖連 → 看 `docker compose ps`，db 若不是 `(healthy)`，再等幾秒或看 `docker compose logs db`
+1. `db` 容器還沒 healthy 就被 web 試圖連 → 看 `docker compose ps`，db 若不是 `(healthy)`
+   ，再等幾秒或看 `docker compose logs db`
 2. `DB_HOST` 設錯：本機 compose 內固定為 `db`（service 名），不是 `localhost` 或 `127.0.0.1`
-3. `POSTGRES_PASSWORD` 與 web 端用的不一致：兩邊都從 `.env` 讀，但若你曾改過密碼又沒重建 volume，Postgres 初始密碼是第一次啟動時固定下來的。`docker compose down -v` 砍 volume 再 up
+3. `POSTGRES_PASSWORD` 與 web 端用的不一致：兩邊都從 `.env` 讀，但若你曾改過密碼又沒重建 volume，Postgres
+   初始密碼是第一次啟動時固定下來的。`docker compose down -v` 砍 volume 再 up
 
 ### collectstatic 失敗 `PermissionError: /app/staticfiles`
 
@@ -224,8 +355,10 @@ Failed authorization procedure. <domain> (http-01): urn:ietf:params:acme:error:c
 
 1. **DNS 沒指好**：`dig $DOMAIN_NAME` 必須回 VM 的公開 IP
 2. **Port 80 不通**：雲端防火牆／安全群組沒開 80。Let's Encrypt 只能用 80 做 HTTP-01 challenge
-3. **nginx 沒在跑 / placeholder cert 沒種**：先 `docker compose --profile tls ps` 確認 nginx 是 `Up`；若 nginx 因 cert 不存在起不來，照「首次取得憑證」步驟先種 placeholder
-4. **Let's Encrypt rate limit**：同網域一週 5 次失敗就會被擋一小時。看 `docker compose --profile tls logs certbot` 是否提到 rate limit
+3. **nginx 沒在跑 / placeholder cert 沒種**：先 `docker compose --profile tls ps` 確認 nginx 是 `Up`；若 nginx 因 cert
+   不存在起不來，照「首次取得憑證」步驟先種 placeholder
+4. **Let's Encrypt rate limit**：同網域一週 5 次失敗就會被擋一小時。看 `docker compose --profile tls logs certbot` 是否提到
+   rate limit
 5. **`--force-renewal` 在第一次取得時不需要也不會有害**：但首次成功之後別常用，否則容易撞 rate limit
 
 debug 步驟：
@@ -245,25 +378,30 @@ docker compose --profile tls logs certbot --tail 100
 
 ```
 .
-├── accounts/                 # 唯一的 app：使用者模型 + 認證 API
-│   ├── models.py             # CustomUser（USERNAME_FIELD=email、UUIDv7 主鍵）
-│   ├── serializers.py        # 註冊（接 Django 密碼驗證器）、自訂 TokenObtainPair
-│   ├── views.py              # register / login / logout / users（DRF generics）
-│   ├── urls.py
-│   └── tests.py              # 23 個測試
-├── config/                   # Django project
-│   ├── settings.py           # 全部環境差異值都從 env var 讀
-│   └── urls.py
+├── accounts/                      # 認證 app：使用者模型 + 認證 API
+│   ├── models.py                  # CustomUser（USERNAME_FIELD = email、UUIDv7 主鍵、role）
+│   ├── views.py                   # register / login / logout / token / users
+│   ├── serializers.py             # 自訂 TokenObtainPair、註冊與使用者序列化
+│   ├── urls.py                    # /api/auth/ 路由
+│   ├── admin.py                   # CustomUser admin 註冊
+│   ├── tests.py                   # APITestCase 測試
+│   ├── management/commands/
+│   │   └── ensure_superuser.py    # 冪等建立／補齊 admin（entrypoint 啟動時呼叫）
+│   └── migrations/
+├── config/                        # Django project
+│   ├── settings.py                # 全部環境差異值都從 env var 讀
+│   ├── urls.py                    # admin/ + api/auth/
+│   └── wsgi.py / asgi.py
 ├── docker/
-│   ├── entrypoint.sh         # wait-for-db → migrate → collectstatic → superuser → gunicorn
+│   ├── entrypoint.sh              # wait-for-db → migrate → collectstatic → ensure_superuser → gunicorn
 │   └── nginx/
 │       ├── default.conf.template
 │       └── ssl-params.conf.template
-├── Dockerfile                # multi-stage：builder → runtime (slim + libpq5)
-├── docker-compose.yml        # db + web；nginx + certbot 在 profile: [tls]
-├── requirements.txt          # runtime 依賴
-├── requirements-dev.txt      # + ruff、coverage（dev/CI，不進 image）
-├── pyproject.toml            # ruff / coverage 設定
-├── .env.example              # 環境變數樣本（複製成 .env）
-└── README.md                 # 本檔
+├── Dockerfile                     # multi-stage：builder (build deps) → runtime (slim + libpq5)
+├── docker-compose.yml             # db + web；nginx + certbot 在 profile: [tls]
+├── requirements.txt               # runtime 依賴
+├── requirements-dev.txt           # 開發／CI 依賴（ruff、coverage；含 -r requirements.txt）
+├── pyproject.toml                 # ruff + coverage 設定（僅工具設定，不做 packaging）
+├── .env.example                   # 環境變數樣本（複製成 .env）
+└── README.md                      # 本檔
 ```
