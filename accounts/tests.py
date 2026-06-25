@@ -98,9 +98,7 @@ class UserRegisterAPITests(APITestCase):
         self.assertEqual(str(response.data['email'][0]), '此 email 已被註冊')
 
     def test_register_duplicate_username_returns_400(self):
-        User.objects.create_user(
-            username='newbie', email='other@example.com', password='pass12345'
-        )
+        User.objects.create_user(username='newbie', email='other@example.com', password='pass12345')
         response = self.client.post(self.url, self.valid_payload, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('username', response.data)
