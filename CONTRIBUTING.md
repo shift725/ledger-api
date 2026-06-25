@@ -67,11 +67,11 @@ fork → 從最新 main 開分支 → 改動 → 本機自檢（lint + format + 
 ```bash
 ruff check .                 # lint（規則集 E / F / I / UP）
 ruff format --check .        # 確認格式（單引號風格）；要實際套用改 ruff format .
-coverage run manage.py test  # 跑測試並蒐集覆蓋率（branch 模式，需 DATABASE_URL）
+coverage run -m pytest       # 跑測試並蒐集覆蓋率（branch 模式，需 DATABASE_URL）
 coverage report              # 覆蓋率報表（accounts、config；低於 fail_under=75 即非零結束）
 ```
 
-容器內若只想跑測試（runtime image 不含覆蓋率工具，改用 Django 內建 runner）：
+容器內若只想跑測試（runtime image 不含 pytest／覆蓋率工具，改用 Django 內建 runner）：
 
 ```bash
 docker compose exec web python manage.py test accounts
@@ -167,7 +167,7 @@ chore/42-bump-ruff
 
 - [ ] 從最新 `main` 開的分支，分支名符合 [§5](#5-分支命名規則)。
 - [ ] `ruff check .` 與 `ruff format --check .` 通過。
-- [ ] `coverage run manage.py test` 全綠，且 `coverage report` 不低於 `fail_under`（目前 75）。
+- [ ] `coverage run -m pytest` 全綠，且 `coverage report` 不低於 `fail_under`（目前 75）。
 - [ ] 新端點 / 模型 / 序列化邏輯或 bug 修復**已附對應測試**（見 [§9](#9-測試要求)）。
 - [ ] commit 訊息符合 Conventional Commits，且**未加 `Co-Authored-By` trailer**。
 - [ ] 需登入端點已標權限類別；業務查詢／寫入皆依 `request.user`。
@@ -180,17 +180,18 @@ chore/42-bump-ruff
 
 ## 9. 測試要求
 
-- 測試 runner：Django 內建（**`manage.py test`**）。既有約 23 個測試集中在 [`accounts/tests.py`](accounts/tests.py)，採 DRF **`APITestCase`** 風格；新功能（如 `ledger`）比照此風格放各 app 的 `tests.py`。
+- 測試 runner：**`pytest`**（+ `pytest-django`，dev 依賴）。採**並存**——既有約 23 個 `accounts/tests.py`（DRF `APITestCase`／unittest 風格）由 pytest 原樣收集跑綠、**不改寫**；新功能（如 `ledger`）用 **pytest 風格**（fixture、參數化、`django_assert_num_queries`），共用 fixture 放根目錄 `conftest.py`。容器內仍用 Django runner（runtime image 不含 pytest）。
 - **必須附測試**：新增端點 / 模型 / 序列化邏輯時；修 bug 時請**先寫一個能重現問題的失敗測試，再修到綠**。純文件 / 純格式變更可豁免。
 - 跑法：
 
   ```bash
-  coverage run manage.py test                              # 本機 + 覆蓋率（branch 模式，需 DATABASE_URL）
+  coverage run -m pytest                                   # 本機 + 覆蓋率（branch 模式，需 DATABASE_URL）
   coverage report                                          # 文字報表；低於 fail_under=75 即非零結束
   coverage html                                            # htmlcov/index.html 逐行檢視
   coverage xml                                             # coverage.xml（CI / 工具用）
-  python manage.py test                                    # 本機只跑測試
-  docker compose exec web python manage.py test            # 容器內全部
+  pytest                                                   # 本機只跑測試（需 DATABASE_URL）
+  pytest --collect-only -q                                 # 只列收集到的測試
+  docker compose exec web python manage.py test            # 容器內全部（Django runner，無 pytest）
   docker compose exec web python manage.py test accounts   # 容器內單一 app
   ```
 
