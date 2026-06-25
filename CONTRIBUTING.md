@@ -77,7 +77,19 @@ coverage report              # 覆蓋率報表（accounts、config；低於 fail
 docker compose exec web python manage.py test accounts
 ```
 
-> **現況 vs 目標**：目前自檢為**手動**執行。以 **pre-commit** 在每次 commit 前自動跑 lint/format、以及在 PR 上自動跑 lint + test 的 **CI**，都是 roadmap 上的目標、**尚未落地**；在那之前，請以上述手動自檢與人工 review 為準。
+**pre-commit（自動化上面的 lint/format）**
+
+裝好後每次 `git commit` 會自動跑 ruff lint/format 與通用檢查（trailing-whitespace、EOF、check-yaml…），免去手動跑前兩道：
+
+```bash
+pip install -r requirements-dev.txt   # 已含 pre-commit
+pre-commit install                    # 安裝 git hook（一次性）
+pre-commit run --all-files            # 首次、或想對全 repo 跑一次時
+```
+
+hook 會自動修可修的（如移除未用 import、統一格式）；被修改的檔需重新 `git add` 再 commit。Ruff 規則沿用 `pyproject.toml`，不重複定義。
+
+> **現況 vs 目標**：lint/format 的提交前自檢已由 **pre-commit 自動化**（上方）；**測試與覆蓋率**仍須手動跑（pre-commit 不掛測試，因需 Postgres）。在 PR 上自動跑 lint + test 的 **CI** 仍是 roadmap 目標、**尚未落地**，落地前以本機自檢與人工 review 為準。
 
 ---
 

@@ -1,0 +1,19 @@
+# pre-commit hooks —— commit 前自動跑 lint/format 與通用檢查。
+# Ruff 規則沿用 pyproject.toml（單一真實來源），此處不重複定義。
+# 版本同步鐵則：ruff-pre-commit 的 rev 必須等於 requirements-dev.txt 的 ruff 釘版。
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.16            # = requirements-dev.txt 的 ruff==0.15.16
+    hooks:
+      - id: ruff-check       # linter（官方新版 hook id）
+        args: [--fix]        # 僅套用 safe fixes
+      - id: ruff-format      # 格式化（讀 pyproject 的 single-quote）
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]   # 保留 Markdown 行尾雙空格硬換行
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: check-added-large-files
