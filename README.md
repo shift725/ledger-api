@@ -167,9 +167,10 @@ ruff check .                                   # lint（規則集 E / F / I / UP
 ruff check . --fix                             # 自動修可修的
 ruff format .                                  # 格式化（維持單引號風格）
 
-coverage run manage.py test                    # 跑測試並蒐集覆蓋率（需 DATABASE_URL）
-coverage report                                # 文字報表（涵蓋 accounts、config）
+coverage run manage.py test                    # 跑測試並蒐集覆蓋率（branch 模式，需 DATABASE_URL）
+coverage report                                # 文字報表（accounts、config；低於 fail_under=75 即非零結束）
 coverage html                                  # 產生 htmlcov/index.html，瀏覽器逐行檢視
+coverage xml                                   # 產生 coverage.xml（CI / 工具用，預設輸出）
 ```
 
 容器內若只想跑測試（runtime image 不含覆蓋率工具，改用 Django 內建 runner）：

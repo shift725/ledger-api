@@ -17,6 +17,7 @@ select = ["E", "F", "I", "UP"]
 quote-style = "single"
 
 [tool.coverage.run]
+branch = true                       # 行 + 分支覆蓋（if/else 兩條路徑都走過才算）
 source = ["accounts", "config"]
 omit = [
     "*/migrations/*",
@@ -29,3 +30,5 @@ omit = [
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
+precision = 2                       # 顯示/比較到小數兩位，fail_under 邊界更穩
+fail_under = 75                     # 防倒退地板（branch baseline≈77.34% 之下、留 ~2 點緩衝）
