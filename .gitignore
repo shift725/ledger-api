@@ -16,5 +16,6 @@ db.sqlite3
 
 # Dev tooling artifacts (ruff / coverage caches & reports)
 .coverage
+coverage.xml
 htmlcov/
 .ruff_cache/

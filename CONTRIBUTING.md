@@ -67,8 +67,8 @@ fork → 從最新 main 開分支 → 改動 → 本機自檢（lint + format + 
 ```bash
 ruff check .                 # lint（規則集 E / F / I / UP）
 ruff format --check .        # 確認格式（單引號風格）；要實際套用改 ruff format .
-coverage run manage.py test  # 跑測試（需 DATABASE_URL）
-coverage report              # 覆蓋率報表（涵蓋 accounts、config）
+coverage run manage.py test  # 跑測試並蒐集覆蓋率（branch 模式，需 DATABASE_URL）
+coverage report              # 覆蓋率報表（accounts、config；低於 fail_under=75 即非零結束）
 ```
 
 容器內若只想跑測試（runtime image 不含覆蓋率工具，改用 Django 內建 runner）：
@@ -155,7 +155,7 @@ chore/42-bump-ruff
 
 - [ ] 從最新 `main` 開的分支，分支名符合 [§5](#5-分支命名規則)。
 - [ ] `ruff check .` 與 `ruff format --check .` 通過。
-- [ ] `coverage run manage.py test` 全綠，且覆蓋率未明顯倒退。
+- [ ] `coverage run manage.py test` 全綠，且 `coverage report` 不低於 `fail_under`（目前 75）。
 - [ ] 新端點 / 模型 / 序列化邏輯或 bug 修復**已附對應測試**（見 [§9](#9-測試要求)）。
 - [ ] commit 訊息符合 Conventional Commits，且**未加 `Co-Authored-By` trailer**。
 - [ ] 需登入端點已標權限類別；業務查詢／寫入皆依 `request.user`。
@@ -173,13 +173,16 @@ chore/42-bump-ruff
 - 跑法：
 
   ```bash
-  coverage run manage.py test                              # 本機 + 覆蓋率（需 DATABASE_URL）
+  coverage run manage.py test                              # 本機 + 覆蓋率（branch 模式，需 DATABASE_URL）
+  coverage report                                          # 文字報表；低於 fail_under=75 即非零結束
+  coverage html                                            # htmlcov/index.html 逐行檢視
+  coverage xml                                             # coverage.xml（CI / 工具用）
   python manage.py test                                    # 本機只跑測試
   docker compose exec web python manage.py test            # 容器內全部
   docker compose exec web python manage.py test accounts   # 容器內單一 app
   ```
 
-- 覆蓋率：`coverage report` 觀察 `accounts` / `config`。目前**未設硬性覆蓋率門檻**；PR **不應使覆蓋率明顯倒退**。硬性門檻與 branch 覆蓋會在後續（程式品質自動化 / CI）一併導入。
+- 覆蓋率：`coverage report` 觀察 `accounts` / `config`，已啟用 **branch 覆蓋**。已設防倒退地板 **`fail_under = 75`**（baseline≈77.34%）：`coverage report` 低於門檻即非零結束。在 PR 上自動跑覆蓋率的 CI（屬後續 CI pipeline 階段）落地前，請以本機 `coverage report` 自檢，PR **不應使覆蓋率低於門檻**。
 
 ---
 
