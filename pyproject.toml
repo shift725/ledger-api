@@ -32,3 +32,8 @@ show_missing = true
 skip_covered = true
 precision = 2                       # 顯示/比較到小數兩位，fail_under 邊界更穩
 fail_under = 75                     # 防倒退地板（branch baseline≈77.34% 之下、留 ~2 點緩衝）
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings"
+# Django 慣例把測試放 tests.py；pytest 預設只找 test_*.py/*_test.py，故補 tests.py（否則收集 0 個）
+python_files = ["tests.py", "test_*.py", "*_tests.py"]
