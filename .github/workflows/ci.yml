@@ -1,0 +1,61 @@
+name: CI
+
+# PR（任何分支發的 PR）+ push 到 main 時觸發。
+# 只在 push main 跑，避免 feature 分支「push 事件 + PR 事件」重複跑兩次。
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # 順帶起一顆臨時 Postgres 給測試連（跑完即丟）。
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ledger
+          POSTGRES_PASSWORD: ci-postgres-password
+          POSTGRES_DB: ledger
+        ports:
+          - 5432:5432
+        # 等 DB ready 再開始跑測試，否則第一個連線會撲空。
+        options: >-
+          --health-cmd "pg_isready -U ledger -d ledger"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    # settings.py 沒給 SECRET_KEY / DATABASE_URL 預設值 → 不注入就會 import 崩。
+    # 這兩個是 CI 專用拋棄值（測試 DB 隨 job 消滅），非真機密，可明寫。
+    env:
+      SECRET_KEY: ci-secret-key-not-for-production
+      DATABASE_URL: postgres://ledger:ci-postgres-password@localhost:5432/ledger
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip                       # 快取 pip 下載，第二次跑更快
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: 安裝依賴（runtime + 開發工具）
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint（ruff check）
+        run: ruff check .
+
+      - name: 格式檢查（ruff format --check）
+        run: ruff format --check .
+
+      - name: 測試 + 蒐集覆蓋率
+        run: coverage run -m pytest
+
+      - name: 覆蓋率門檻（pyproject fail_under=75，低於即 fail）
+        run: coverage report
