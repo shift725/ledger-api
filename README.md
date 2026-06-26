@@ -1,5 +1,7 @@
 # ledger-api
 
+[![CI](https://github.com/shift725/ledger-api/actions/workflows/ci.yml/badge.svg)](https://github.com/shift725/ledger-api/actions/workflows/ci.yml)
+
 記帳 REST API 作品：以 Django REST Framework + SimpleJWT 打底的後端服務。
 
 目前已完成**帳號與認證核心**（註冊、登入、登出、JWT 管理、使用者查詢）；**記帳領域**（帳戶、分類、交易、標籤）為進行中的下一階段。本文件說明如何用 Docker 在本機跑起來、如何在本機直接開發，以及如何部署到單一 Linux VM 並啟用 HTTPS。
