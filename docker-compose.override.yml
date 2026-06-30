@@ -1,0 +1,12 @@
+# dev-only override：docker compose 會自動把本檔合併進 docker-compose.yml（不必加 -f）。
+# 將 host 原始碼掛進容器，讓容器內 makemigrations 產生的檔直接落在 host repo，
+# 不必為了取得 migration 而 rebuild image。
+# 正式部署請改用 `docker compose -f docker-compose.yml ...` 以略過本檔。
+services:
+  web:
+    volumes:
+      - .:/app
+  db:
+    # 對外開放 DB port（host 5433 → 容器 5432），讓本機 venv 的 pytest 連得到容器內的 PostgreSQL。
+    ports:
+      - "5433:5432"
