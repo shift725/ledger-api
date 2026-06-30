@@ -18,7 +18,7 @@ quote-style = "single"
 
 [tool.coverage.run]
 branch = true                       # 行 + 分支覆蓋（if/else 兩條路徑都走過才算）
-source = ["accounts", "config"]
+source = ["accounts", "config", "ledger"]
 omit = [
     "*/migrations/*",
     "*/tests.py",

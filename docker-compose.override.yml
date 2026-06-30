@@ -6,3 +6,7 @@ services:
   web:
     volumes:
       - .:/app
+  db:
+    # 對外開放 DB port（host 5433 → 容器 5432），讓本機 venv 的 pytest 連得到容器內的 PostgreSQL。
+    ports:
+      - "5433:5432"
