@@ -19,3 +19,13 @@ def auth_client(user):
     client = APIClient()
     client.force_authenticate(user=user)
     return client
+
+
+@pytest.fixture
+def other_user(db):
+    """第二個使用者，用來驗證資料隔離（A 拿不到 B 的資料）。"""
+    return get_user_model().objects.create_user(
+        username='otheruser',
+        email='other@example.com',
+        password='pw-12345',
+    )
