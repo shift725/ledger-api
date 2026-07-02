@@ -344,6 +344,76 @@ class TestTransactionViewSet:
         assert auth_client.delete(detail).status_code == 404
 
 
+# --- Transaction 餘額維護：建/編輯/刪皆對帳（balance == Σincome − Σexpense）---
+
+
+@pytest.mark.django_db
+class TestTransactionBalance:
+    URL = '/api/ledger/transactions/'
+
+    def _account(self, owner, name='現金'):
+        return Account.objects.create(user=owner, name=name, type=Account.Type.CASH)
+
+    def _post(self, client, acc, amount, type_):
+        return client.post(
+            self.URL,
+            {'account': str(acc.id), 'amount': amount, 'type': type_},
+            format='json',
+        )
+
+    def test_create_income_increases_balance(self, auth_client, user):
+        acc = self._account(user)
+        assert self._post(auth_client, acc, '100.00', 'income').status_code == 201
+        acc.refresh_from_db()
+        assert acc.balance == Decimal('100.00')
+
+    def test_create_expense_decreases_balance(self, auth_client, user):
+        acc = self._account(user)
+        assert self._post(auth_client, acc, '30.00', 'expense').status_code == 201
+        acc.refresh_from_db()
+        assert acc.balance == Decimal('-30.00')  # 允許負餘額（透支/信用卡情境）
+
+    def test_reconciliation_invariant(self, auth_client, user):
+        # 混合多筆 → balance 恆等於 Σincome − Σexpense
+        acc = self._account(user)
+        self._post(auth_client, acc, '100.00', 'income')
+        self._post(auth_client, acc, '250.50', 'income')
+        self._post(auth_client, acc, '30.00', 'expense')
+        acc.refresh_from_db()
+        assert acc.balance == Decimal('320.50')  # 100 + 250.50 − 30
+
+    def test_edit_amount_adjusts_balance(self, auth_client, user):
+        acc = self._account(user)
+        txn_id = self._post(auth_client, acc, '100.00', 'expense').data['id']
+        auth_client.patch(f'{self.URL}{txn_id}/', {'amount': '40.00'}, format='json')
+        acc.refresh_from_db()
+        assert acc.balance == Decimal('-40.00')  # 還原 -100、套用 -40（不是 -140）
+
+    def test_edit_type_flip_income_to_expense(self, auth_client, user):
+        acc = self._account(user)
+        txn_id = self._post(auth_client, acc, '100.00', 'income').data['id']
+        auth_client.patch(f'{self.URL}{txn_id}/', {'type': 'expense'}, format='json')
+        acc.refresh_from_db()
+        assert acc.balance == Decimal('-100.00')  # +100 還原後套 -100
+
+    def test_edit_moves_balance_between_accounts(self, auth_client, user):
+        a = self._account(user, name='現金')
+        b = self._account(user, name='銀行')
+        txn_id = self._post(auth_client, a, '100.00', 'expense').data['id']
+        auth_client.patch(f'{self.URL}{txn_id}/', {'account': str(b.id)}, format='json')
+        a.refresh_from_db()
+        b.refresh_from_db()
+        assert a.balance == Decimal('0.00')  # 舊帳戶還原
+        assert b.balance == Decimal('-100.00')  # 新帳戶套用
+
+    def test_delete_reverses_balance(self, auth_client, user):
+        acc = self._account(user)
+        txn_id = self._post(auth_client, acc, '100.00', 'income').data['id']
+        auth_client.delete(f'{self.URL}{txn_id}/')
+        acc.refresh_from_db()
+        assert acc.balance == Decimal('0.00')  # 反向沖銷回 0
+
+
 # --- SavingsGoal：判別式 validate（月度/年度）→ 400，外加任意 year/month 與隔離 ---
 
 
