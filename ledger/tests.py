@@ -4,12 +4,16 @@
 用 savepoint 框住才不會讓同一測試的後續 ORM 操作炸掉。複用 conftest 的 `user` fixture。
 """
 
+import threading
+from datetime import UTC, datetime
 from decimal import Decimal
+from unittest import mock
 
 import pytest
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 from rest_framework.test import APIClient
 
+from ledger import services
 from ledger.models import Account, Category, SavingsGoal, Tag, Transaction
 
 
@@ -344,6 +348,138 @@ class TestTransactionViewSet:
         assert auth_client.delete(detail).status_code == 404
 
 
+# --- Transaction 餘額維護：建/編輯/刪皆對帳（balance == Σincome − Σexpense）---
+
+
+@pytest.mark.django_db
+class TestTransactionBalance:
+    URL = '/api/ledger/transactions/'
+
+    def _account(self, owner, name='現金'):
+        return Account.objects.create(user=owner, name=name, type=Account.Type.CASH)
+
+    def _post(self, client, acc, amount, type_):
+        return client.post(
+            self.URL,
+            {'account': str(acc.id), 'amount': amount, 'type': type_},
+            format='json',
+        )
+
+    def test_create_income_increases_balance(self, auth_client, user):
+        acc = self._account(user)
+        assert self._post(auth_client, acc, '100.00', 'income').status_code == 201
+        acc.refresh_from_db()
+        assert acc.balance == Decimal('100.00')
+
+    def test_create_expense_decreases_balance(self, auth_client, user):
+        acc = self._account(user)
+        assert self._post(auth_client, acc, '30.00', 'expense').status_code == 201
+        acc.refresh_from_db()
+        assert acc.balance == Decimal('-30.00')  # 允許負餘額（透支/信用卡情境）
+
+    def test_reconciliation_invariant(self, auth_client, user):
+        # 混合多筆 → balance 恆等於 Σincome − Σexpense
+        acc = self._account(user)
+        self._post(auth_client, acc, '100.00', 'income')
+        self._post(auth_client, acc, '250.50', 'income')
+        self._post(auth_client, acc, '30.00', 'expense')
+        acc.refresh_from_db()
+        assert acc.balance == Decimal('320.50')  # 100 + 250.50 − 30
+
+    def test_edit_amount_adjusts_balance(self, auth_client, user):
+        acc = self._account(user)
+        txn_id = self._post(auth_client, acc, '100.00', 'expense').data['id']
+        auth_client.patch(f'{self.URL}{txn_id}/', {'amount': '40.00'}, format='json')
+        acc.refresh_from_db()
+        assert acc.balance == Decimal('-40.00')  # 還原 -100、套用 -40（不是 -140）
+
+    def test_edit_type_flip_income_to_expense(self, auth_client, user):
+        acc = self._account(user)
+        txn_id = self._post(auth_client, acc, '100.00', 'income').data['id']
+        auth_client.patch(f'{self.URL}{txn_id}/', {'type': 'expense'}, format='json')
+        acc.refresh_from_db()
+        assert acc.balance == Decimal('-100.00')  # +100 還原後套 -100
+
+    def test_edit_moves_balance_between_accounts(self, auth_client, user):
+        a = self._account(user, name='現金')
+        b = self._account(user, name='銀行')
+        txn_id = self._post(auth_client, a, '100.00', 'expense').data['id']
+        auth_client.patch(f'{self.URL}{txn_id}/', {'account': str(b.id)}, format='json')
+        a.refresh_from_db()
+        b.refresh_from_db()
+        assert a.balance == Decimal('0.00')  # 舊帳戶還原
+        assert b.balance == Decimal('-100.00')  # 新帳戶套用
+
+    def test_delete_reverses_balance(self, auth_client, user):
+        acc = self._account(user)
+        txn_id = self._post(auth_client, acc, '100.00', 'income').data['id']
+        auth_client.delete(f'{self.URL}{txn_id}/')
+        acc.refresh_from_db()
+        assert acc.balance == Decimal('0.00')  # 反向沖銷回 0
+
+
+# --- 並發：F() 生產路徑不丟更新 + select_for_update 鎖機制（真交易，故 transaction=True）---
+
+
+def _run_concurrently(target, count):
+    """開 count 條執行緒跑 target()，收集各執行緒的例外。
+
+    thread-local 連線各自 close，否則洩漏、卡住 teardown；worker 的錯不吞、往外浮。
+    """
+    errors = []
+
+    def wrapped():
+        try:
+            target()
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            connection.close()
+
+    threads = [threading.Thread(target=wrapped) for _ in range(count)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors, errors
+
+
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_creates_no_lost_update(user):
+    # 招牌：20 條執行緒各記一筆 +1 收入到同一帳戶 → balance 必為 20。
+    # F() 讓加法在 DB 端算（UPDATE balance = balance + 1），並發 UPDATE 由 DB 排隊 → 無丟失。
+    # 若改成 Python 端「讀 balance → +1 → save」，這裡會掉更新、結果少於 20。
+    acc = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+
+    def create_one():
+        Transaction.objects.create(
+            user=user, account=acc, amount=Decimal('1'), type=Transaction.Type.INCOME
+        )
+        services.apply_to_balance(acc.id, Transaction.Type.INCOME, Decimal('1'))
+
+    _run_concurrently(create_one, count=20)
+    acc.refresh_from_db()
+    assert acc.balance == Decimal('20')
+
+
+@pytest.mark.django_db(transaction=True)
+def test_select_for_update_serializes_read_modify_write(user):
+    # 鎖機制示範（非生產路徑）：故意用「讀-改-寫」（無 F()）——不鎖的話 20 條並發會掉更新。
+    # select_for_update 鎖住該列，後到者卡住等前者 commit → 序列化讀-改-寫 → 結果正確。
+    # 這正是 perform_update 讀舊值時依賴的機制（同筆並發編輯讀到的是已提交的前一版）。
+    acc = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+
+    def increment_locked():
+        with transaction.atomic():
+            locked = Account.objects.select_for_update().get(pk=acc.id)
+            locked.balance = locked.balance + Decimal('1')
+            locked.save()
+
+    _run_concurrently(increment_locked, count=20)
+    acc.refresh_from_db()
+    assert acc.balance == Decimal('20')
+
+
 # --- SavingsGoal：判別式 validate（月度/年度）→ 400，外加任意 year/month 與隔離 ---
 
 
@@ -442,3 +578,108 @@ class TestSavingsGoalViewSet:
         assert auth_client.get(detail).status_code == 404
         assert auth_client.patch(detail, {'amount': '1.00'}, format='json').status_code == 404
         assert auth_client.delete(detail).status_code == 404
+
+
+# --- carry-forward：建交易時把上月月度目標帶入「真實當下月」（mock 固定 now → 決定性）---
+
+
+def _at_month(year, month):
+    """把 services 看到的『現在』釘死成指定年月 → carry-forward 的當下月變決定性。"""
+    return mock.patch(
+        'ledger.services.timezone.now', return_value=datetime(year, month, 15, tzinfo=UTC)
+    )
+
+
+@pytest.mark.django_db
+class TestCarryForwardSavingsGoal:
+    URL = '/api/ledger/transactions/'
+
+    def _account(self, user):
+        return Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+
+    def _monthly_goal(self, user, year, month, amount):
+        return SavingsGoal.objects.create(
+            user=user,
+            period_type=SavingsGoal.PeriodType.MONTHLY,
+            year=year,
+            month=month,
+            amount=Decimal(amount),
+        )
+
+    def _month_goals(self, user, year, month):
+        return SavingsGoal.objects.filter(
+            user=user, period_type=SavingsGoal.PeriodType.MONTHLY, year=year, month=month
+        )
+
+    def _post_txn(self, client, acc, occurred_at=None):
+        body = {'account': str(acc.id), 'amount': '10.00', 'type': 'expense'}
+        if occurred_at:
+            body['occurred_at'] = occurred_at
+        return client.post(self.URL, body, format='json')
+
+    def test_first_txn_copies_prev_month_goal(self, auth_client, user):
+        # 上月有目標 → 當下月第一筆交易自動建當下月目標、複製上月金額
+        self._monthly_goal(user, 2026, 6, '5000')
+        acc = self._account(user)
+        with _at_month(2026, 7):
+            assert self._post_txn(auth_client, acc).status_code == 201
+        assert self._month_goals(user, 2026, 7).get().amount == Decimal('5000')
+
+    def test_no_prev_goal_creates_nothing(self, auth_client, user):
+        # 上月從未設定 → 不建（carry-forward 只複製、不無中生有）
+        acc = self._account(user)
+        with _at_month(2026, 7):
+            self._post_txn(auth_client, acc)
+        assert not self._month_goals(user, 2026, 7).exists()
+
+    def test_second_txn_does_not_duplicate(self, auth_client, user):
+        # 同月第二筆 → get_or_create 找到既有，不重複
+        self._monthly_goal(user, 2026, 6, '5000')
+        acc = self._account(user)
+        with _at_month(2026, 7):
+            self._post_txn(auth_client, acc)
+            self._post_txn(auth_client, acc)
+        assert self._month_goals(user, 2026, 7).count() == 1
+
+    def test_january_prev_is_december_last_year(self, auth_client, user):
+        # month==1 → 上月為 (y−1, 12)，跨年正確
+        self._monthly_goal(user, 2025, 12, '8000')
+        acc = self._account(user)
+        with _at_month(2026, 1):
+            self._post_txn(auth_client, acc)
+        assert self._month_goals(user, 2026, 1).get().amount == Decimal('8000')
+
+    def test_backfilled_past_txn_does_not_build_history(self, auth_client, user):
+        # 補登：occurred_at 在過去月，但 carry-forward 只碰真實當下月 → 不建該過去月目標
+        self._monthly_goal(user, 2026, 6, '5000')
+        acc = self._account(user)
+        with _at_month(2026, 7):
+            resp = self._post_txn(auth_client, acc, occurred_at='2026-03-10T00:00:00Z')
+            assert resp.status_code == 201
+        assert not self._month_goals(user, 2026, 3).exists()  # 過去月不冒出來
+        assert self._month_goals(user, 2026, 7).exists()  # 只碰當下月
+
+
+@pytest.mark.django_db(transaction=True)
+def test_carry_forward_concurrent_creates_single_goal(user):
+    # 並發護欄：新月同時多請求 → get_or_create 的唯一約束 + savepoint 使只生一筆（不重複、不 500）。
+    # 包在 transaction.atomic() 內模擬 perform_create 的真實情境（savepoint 在外層交易內安全）。
+    SavingsGoal.objects.create(
+        user=user,
+        period_type=SavingsGoal.PeriodType.MONTHLY,
+        year=2026,
+        month=6,
+        amount=Decimal('5000'),
+    )
+
+    def carry():
+        with _at_month(2026, 7), transaction.atomic():
+            services.carry_forward_savings_goal(user)
+
+    _run_concurrently(carry, count=10)
+    assert (
+        SavingsGoal.objects.filter(
+            user=user, period_type=SavingsGoal.PeriodType.MONTHLY, year=2026, month=7
+        ).count()
+        == 1
+    )

@@ -4,6 +4,7 @@ from rest_framework import status, viewsets
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from . import services
 from .models import Account, Category, SavingsGoal, Tag, Transaction
 from .serializers import (
     AccountSerializer,
@@ -73,6 +74,30 @@ class AccountViewSet(OwnedModelViewSet):
 class TransactionViewSet(OwnedModelViewSet):
     queryset = Transaction.objects.all()
     serializer_class = TransactionSerializer
+
+    def perform_create(self, serializer):
+        with transaction.atomic():
+            txn = serializer.save(user=self.request.user)
+            services.apply_to_balance(txn.account_id, txn.type, txn.amount)
+            # carry-forward 只在建立時觸發（編輯/刪除不碰）；與建交易同一 atomic，一起成敗。
+            services.carry_forward_savings_goal(self.request.user)
+
+    def perform_update(self, serializer):
+        # 編輯 = 還原舊影響 + 套用新影響（帳戶可被改掉，故 reverse 打舊帳戶、apply 打新帳戶）。
+        # 舊值必須是「已提交的前一版」：select_for_update 鎖住這筆交易列，讓同筆並發編輯
+        # 排隊——後到者等前者 commit 後才讀到新值，避免兩個編輯各自 reverse 同一份過期舊值
+        # （F() 擋 lost update，擋不了過期讀）。
+        with transaction.atomic():
+            locked = self.get_queryset().select_for_update().get(pk=serializer.instance.pk)
+            old_account_id, old_type, old_amount = locked.account_id, locked.type, locked.amount
+            txn = serializer.save()
+            services.reverse_from_balance(old_account_id, old_type, old_amount)
+            services.apply_to_balance(txn.account_id, txn.type, txn.amount)
+
+    def perform_destroy(self, instance):
+        with transaction.atomic():
+            services.reverse_from_balance(instance.account_id, instance.type, instance.amount)
+            instance.delete()
 
 
 class SavingsGoalViewSet(OwnedModelViewSet):
