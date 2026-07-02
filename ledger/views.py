@@ -72,7 +72,9 @@ class AccountViewSet(OwnedModelViewSet):
 
 
 class TransactionViewSet(OwnedModelViewSet):
-    queryset = Transaction.objects.all()
+    # 序列化每筆都要 account/category 名稱與 tags：FK 用 select_related（JOIN 一次帶回）、
+    # M2M 用 prefetch_related（第二條查詢+記憶體組裝）→ 查詢數固定，不隨筆數線性成長（N+1）。
+    queryset = Transaction.objects.select_related('account', 'category').prefetch_related('tags')
     serializer_class = TransactionSerializer
 
     def perform_create(self, serializer):
@@ -88,7 +90,16 @@ class TransactionViewSet(OwnedModelViewSet):
         # 排隊——後到者等前者 commit 後才讀到新值，避免兩個編輯各自 reverse 同一份過期舊值
         # （F() 擋 lost update，擋不了過期讀）。
         with transaction.atomic():
-            locked = self.get_queryset().select_for_update().get(pk=serializer.instance.pk)
+            # 剝掉列表用的優化再上鎖：PostgreSQL 禁止 FOR UPDATE 套在 outer join 的
+            # nullable 邊（category 是 SET_NULL → LEFT JOIN，不剝直接 NotSupportedError）；
+            # 鎖舊值只需本列三欄，prefetch 一併剝掉省一次無謂查詢。
+            locked = (
+                self.get_queryset()
+                .select_related(None)
+                .prefetch_related(None)
+                .select_for_update()
+                .get(pk=serializer.instance.pk)
+            )
             old_account_id, old_type, old_amount = locked.account_id, locked.type, locked.amount
             txn = serializer.save()
             services.reverse_from_balance(old_account_id, old_type, old_amount)
