@@ -4,12 +4,14 @@
 用 savepoint 框住才不會讓同一測試的後續 ORM 操作炸掉。複用 conftest 的 `user` fixture。
 """
 
+import threading
 from decimal import Decimal
 
 import pytest
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 from rest_framework.test import APIClient
 
+from ledger import services
 from ledger.models import Account, Category, SavingsGoal, Tag, Transaction
 
 
@@ -412,6 +414,68 @@ class TestTransactionBalance:
         auth_client.delete(f'{self.URL}{txn_id}/')
         acc.refresh_from_db()
         assert acc.balance == Decimal('0.00')  # 反向沖銷回 0
+
+
+# --- 並發：F() 生產路徑不丟更新 + select_for_update 鎖機制（真交易，故 transaction=True）---
+
+
+def _run_concurrently(target, count):
+    """開 count 條執行緒跑 target()，收集各執行緒的例外。
+
+    thread-local 連線各自 close，否則洩漏、卡住 teardown；worker 的錯不吞、往外浮。
+    """
+    errors = []
+
+    def wrapped():
+        try:
+            target()
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            connection.close()
+
+    threads = [threading.Thread(target=wrapped) for _ in range(count)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors, errors
+
+
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_creates_no_lost_update(user):
+    # 招牌：20 條執行緒各記一筆 +1 收入到同一帳戶 → balance 必為 20。
+    # F() 讓加法在 DB 端算（UPDATE balance = balance + 1），並發 UPDATE 由 DB 排隊 → 無丟失。
+    # 若改成 Python 端「讀 balance → +1 → save」，這裡會掉更新、結果少於 20。
+    acc = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+
+    def create_one():
+        Transaction.objects.create(
+            user=user, account=acc, amount=Decimal('1'), type=Transaction.Type.INCOME
+        )
+        services.apply_to_balance(acc.id, Transaction.Type.INCOME, Decimal('1'))
+
+    _run_concurrently(create_one, count=20)
+    acc.refresh_from_db()
+    assert acc.balance == Decimal('20')
+
+
+@pytest.mark.django_db(transaction=True)
+def test_select_for_update_serializes_read_modify_write(user):
+    # 鎖機制示範（非生產路徑）：故意用「讀-改-寫」（無 F()）——不鎖的話 20 條並發會掉更新。
+    # select_for_update 鎖住該列，後到者卡住等前者 commit → 序列化讀-改-寫 → 結果正確。
+    # 這正是 perform_update 讀舊值時依賴的機制（同筆並發編輯讀到的是已提交的前一版）。
+    acc = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+
+    def increment_locked():
+        with transaction.atomic():
+            locked = Account.objects.select_for_update().get(pk=acc.id)
+            locked.balance = locked.balance + Decimal('1')
+            locked.save()
+
+    _run_concurrently(increment_locked, count=20)
+    acc.refresh_from_db()
+    assert acc.balance == Decimal('20')
 
 
 # --- SavingsGoal：判別式 validate（月度/年度）→ 400，外加任意 year/month 與隔離 ---
