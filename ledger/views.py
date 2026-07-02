@@ -79,6 +79,8 @@ class TransactionViewSet(OwnedModelViewSet):
         with transaction.atomic():
             txn = serializer.save(user=self.request.user)
             services.apply_to_balance(txn.account_id, txn.type, txn.amount)
+            # carry-forward 只在建立時觸發（編輯/刪除不碰）；與建交易同一 atomic，一起成敗。
+            services.carry_forward_savings_goal(self.request.user)
 
     def perform_update(self, serializer):
         # 編輯 = 還原舊影響 + 套用新影響（帳戶可被改掉，故 reverse 打舊帳戶、apply 打新帳戶）。

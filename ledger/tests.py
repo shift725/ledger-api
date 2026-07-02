@@ -5,7 +5,9 @@
 """
 
 import threading
+from datetime import UTC, datetime
 from decimal import Decimal
+from unittest import mock
 
 import pytest
 from django.db import IntegrityError, connection, transaction
@@ -576,3 +578,108 @@ class TestSavingsGoalViewSet:
         assert auth_client.get(detail).status_code == 404
         assert auth_client.patch(detail, {'amount': '1.00'}, format='json').status_code == 404
         assert auth_client.delete(detail).status_code == 404
+
+
+# --- carry-forward：建交易時把上月月度目標帶入「真實當下月」（mock 固定 now → 決定性）---
+
+
+def _at_month(year, month):
+    """把 services 看到的『現在』釘死成指定年月 → carry-forward 的當下月變決定性。"""
+    return mock.patch(
+        'ledger.services.timezone.now', return_value=datetime(year, month, 15, tzinfo=UTC)
+    )
+
+
+@pytest.mark.django_db
+class TestCarryForwardSavingsGoal:
+    URL = '/api/ledger/transactions/'
+
+    def _account(self, user):
+        return Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+
+    def _monthly_goal(self, user, year, month, amount):
+        return SavingsGoal.objects.create(
+            user=user,
+            period_type=SavingsGoal.PeriodType.MONTHLY,
+            year=year,
+            month=month,
+            amount=Decimal(amount),
+        )
+
+    def _month_goals(self, user, year, month):
+        return SavingsGoal.objects.filter(
+            user=user, period_type=SavingsGoal.PeriodType.MONTHLY, year=year, month=month
+        )
+
+    def _post_txn(self, client, acc, occurred_at=None):
+        body = {'account': str(acc.id), 'amount': '10.00', 'type': 'expense'}
+        if occurred_at:
+            body['occurred_at'] = occurred_at
+        return client.post(self.URL, body, format='json')
+
+    def test_first_txn_copies_prev_month_goal(self, auth_client, user):
+        # 上月有目標 → 當下月第一筆交易自動建當下月目標、複製上月金額
+        self._monthly_goal(user, 2026, 6, '5000')
+        acc = self._account(user)
+        with _at_month(2026, 7):
+            assert self._post_txn(auth_client, acc).status_code == 201
+        assert self._month_goals(user, 2026, 7).get().amount == Decimal('5000')
+
+    def test_no_prev_goal_creates_nothing(self, auth_client, user):
+        # 上月從未設定 → 不建（carry-forward 只複製、不無中生有）
+        acc = self._account(user)
+        with _at_month(2026, 7):
+            self._post_txn(auth_client, acc)
+        assert not self._month_goals(user, 2026, 7).exists()
+
+    def test_second_txn_does_not_duplicate(self, auth_client, user):
+        # 同月第二筆 → get_or_create 找到既有，不重複
+        self._monthly_goal(user, 2026, 6, '5000')
+        acc = self._account(user)
+        with _at_month(2026, 7):
+            self._post_txn(auth_client, acc)
+            self._post_txn(auth_client, acc)
+        assert self._month_goals(user, 2026, 7).count() == 1
+
+    def test_january_prev_is_december_last_year(self, auth_client, user):
+        # month==1 → 上月為 (y−1, 12)，跨年正確
+        self._monthly_goal(user, 2025, 12, '8000')
+        acc = self._account(user)
+        with _at_month(2026, 1):
+            self._post_txn(auth_client, acc)
+        assert self._month_goals(user, 2026, 1).get().amount == Decimal('8000')
+
+    def test_backfilled_past_txn_does_not_build_history(self, auth_client, user):
+        # 補登：occurred_at 在過去月，但 carry-forward 只碰真實當下月 → 不建該過去月目標
+        self._monthly_goal(user, 2026, 6, '5000')
+        acc = self._account(user)
+        with _at_month(2026, 7):
+            resp = self._post_txn(auth_client, acc, occurred_at='2026-03-10T00:00:00Z')
+            assert resp.status_code == 201
+        assert not self._month_goals(user, 2026, 3).exists()  # 過去月不冒出來
+        assert self._month_goals(user, 2026, 7).exists()  # 只碰當下月
+
+
+@pytest.mark.django_db(transaction=True)
+def test_carry_forward_concurrent_creates_single_goal(user):
+    # 並發護欄：新月同時多請求 → get_or_create 的唯一約束 + savepoint 使只生一筆（不重複、不 500）。
+    # 包在 transaction.atomic() 內模擬 perform_create 的真實情境（savepoint 在外層交易內安全）。
+    SavingsGoal.objects.create(
+        user=user,
+        period_type=SavingsGoal.PeriodType.MONTHLY,
+        year=2026,
+        month=6,
+        amount=Decimal('5000'),
+    )
+
+    def carry():
+        with _at_month(2026, 7), transaction.atomic():
+            services.carry_forward_savings_goal(user)
+
+    _run_concurrently(carry, count=10)
+    assert (
+        SavingsGoal.objects.filter(
+            user=user, period_type=SavingsGoal.PeriodType.MONTHLY, year=2026, month=7
+        ).count()
+        == 1
+    )
