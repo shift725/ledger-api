@@ -11,10 +11,12 @@ from unittest import mock
 
 import pytest
 from django.db import IntegrityError, connection, transaction
+from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APIClient
 
 from ledger import services
 from ledger.models import Account, Category, SavingsGoal, Tag, Transaction
+from ledger.serializers import TransactionSerializer
 
 
 @pytest.mark.django_db
@@ -683,3 +685,45 @@ def test_carry_forward_concurrent_creates_single_goal(user):
         ).count()
         == 1
     )
+
+
+# --- 交易列表查詢數：N+1 展示 + 固定查詢數鎖定 ---
+
+
+@pytest.mark.django_db
+class TestTransactionListQueryCount:
+    URL = '/api/ledger/transactions/'
+    N = 20
+
+    def _build_transactions(self, user):
+        # 每筆都掛 account + category + 2 個 tags，讓序列化的每個關聯欄位都有東西可抓。
+        acc = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+        cat = Category.objects.create(user=user, name='飲食')
+        tags = [Tag.objects.create(user=user, name=f'標籤{i}') for i in range(2)]
+        for _ in range(self.N):
+            txn = Transaction.objects.create(
+                user=user,
+                account=acc,
+                category=cat,
+                amount=Decimal('100'),
+                type=Transaction.Type.EXPENSE,
+            )
+            txn.tags.add(*tags)
+
+    def test_naive_serialization_query_count_grows_linearly(self, user):
+        # 展示（非回歸防線）：未優化的 queryset 序列化時，每筆各自抓
+        # account.name、category.name、tags×2 欄位 ≈ 1 + 4N 次查詢——隨筆數線性成長。
+        self._build_transactions(user)
+        with CaptureQueriesContext(connection) as ctx:
+            TransactionSerializer(Transaction.objects.all(), many=True).data
+        print(f'\nnaive 序列化 {self.N} 筆交易 = {len(ctx)} 次查詢')
+        assert len(ctx) >= 3 * self.N
+
+    def test_list_endpoint_query_count_is_fixed(self, auth_client, user, django_assert_num_queries):
+        # 回歸防線：select_related JOIN 一次帶回 account/category、prefetch_related
+        # 一次帶回全部 tags → 固定 2 次、與筆數無關。改壞 queryset/serializer 這裡當場紅。
+        self._build_transactions(user)
+        with django_assert_num_queries(2):
+            resp = auth_client.get(self.URL)
+        assert resp.status_code == 200
+        assert len(resp.data) == self.N
