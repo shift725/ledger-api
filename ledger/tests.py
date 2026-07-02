@@ -380,7 +380,8 @@ class TestTransactionFilters:
 
     @pytest.fixture
     def data(self, user):
-        # 三筆交易蓋出可區分的維度：帳戶×2、類型×2、金額三檔、六七月各有、一筆掛 tag。
+        # 三筆交易蓋出可區分的維度：帳戶×2、類型×2、金額三檔、六七月各有、
+        # 一筆掛 tag、一筆有 description。
         cash = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
         bank = Account.objects.create(user=user, name='銀行', type=Account.Type.BANK)
         travel = Tag.objects.create(user=user, name='旅遊')
@@ -398,6 +399,7 @@ class TestTransactionFilters:
             amount=Decimal('3000'),
             type=Transaction.Type.EXPENSE,
             name='七月住宿',
+            description='含早餐的溫泉旅館',
             occurred_at=datetime(2026, 7, 5, 18, 0, tzinfo=UTC),
         )
         hotel.tags.add(travel)
@@ -452,6 +454,17 @@ class TestTransactionFilters:
     def test_malformed_uuid_rejected(self, auth_client, data):
         # 格式錯誤是輸入驗證問題，照常 400
         assert auth_client.get(self.URL, {'account': 'not-a-uuid'}).status_code == 400
+
+    def test_search_hits_name_and_description(self, auth_client, data):
+        # SearchFilter：一個 ?search= 對 name/description 做 icontains OR
+        assert self._names(auth_client.get(self.URL, {'search': '住宿'})) == {'七月住宿'}
+        assert self._names(auth_client.get(self.URL, {'search': '早餐'})) == {'七月住宿'}
+
+    def test_ordering_by_amount(self, auth_client, data):
+        resp = auth_client.get(self.URL, {'ordering': 'amount'})
+        assert [row['name'] for row in resp.data['results']] == ['六月午餐', '七月住宿', '薪水']
+        resp = auth_client.get(self.URL, {'ordering': '-amount'})
+        assert [row['name'] for row in resp.data['results']] == ['薪水', '七月住宿', '六月午餐']
 
 
 # --- Transaction 餘額維護：建/編輯/刪皆對帳（balance == Σincome − Σexpense）---

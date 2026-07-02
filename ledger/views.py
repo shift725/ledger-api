@@ -2,6 +2,7 @@ from django.db import transaction
 from django.db.models import ProtectedError
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status, viewsets
+from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -86,8 +87,12 @@ class TransactionViewSet(OwnedModelViewSet):
     # M2M 用 prefetch_related（第二條查詢+記憶體組裝）→ 查詢數固定，不隨筆數線性成長（N+1）。
     queryset = Transaction.objects.select_related('account', 'category').prefetch_related('tags')
     serializer_class = TransactionSerializer
-    filter_backends = [DjangoFilterBackend]
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_class = TransactionFilter
+    search_fields = ['name', 'description']
+    # ?ordering=amount 在等值金額上頁界順序不保證穩定（非唯一排序鍵＋offset 分頁），
+    # 個人規模可接受；client 要穩定可自帶次鍵 ?ordering=amount,-occurred_at。
+    ordering_fields = ['occurred_at', 'amount']
 
     def perform_create(self, serializer):
         with transaction.atomic():
