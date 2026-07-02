@@ -1,11 +1,13 @@
 from django.db import transaction
 from django.db.models import ProtectedError
+from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status, viewsets
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from . import services
+from .filters import TransactionFilter
 from .models import Account, Category, SavingsGoal, Tag, Transaction
 from .serializers import (
     AccountSerializer,
@@ -84,6 +86,8 @@ class TransactionViewSet(OwnedModelViewSet):
     # M2M 用 prefetch_related（第二條查詢+記憶體組裝）→ 查詢數固定，不隨筆數線性成長（N+1）。
     queryset = Transaction.objects.select_related('account', 'category').prefetch_related('tags')
     serializer_class = TransactionSerializer
+    filter_backends = [DjangoFilterBackend]
+    filterset_class = TransactionFilter
 
     def perform_create(self, serializer):
         with transaction.atomic():
