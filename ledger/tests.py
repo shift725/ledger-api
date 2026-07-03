@@ -9,7 +9,16 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from unittest import mock
 
-import pytest
+try:
+    import pytest
+except ImportError as exc:
+    # 容器 runtime image 不含 pytest（dev-only）。本檔整份是 pytest 原生，
+    # @pytest.mark.* 裝飾器在 import 當下就要 pytest，無法只搬 import。
+    # 缺席時丟 SkipTest：unittest 探索會把整個模組標為 skipped 而非中斷，
+    # 讓容器無範圍 `manage.py test` 跑完其餘測試並 exit 0。
+    import unittest
+
+    raise unittest.SkipTest('ledger 測試為 pytest 專屬，容器 Django runner 略過') from exc
 from django.db import IntegrityError, connection, transaction
 from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APIClient
