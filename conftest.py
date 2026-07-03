@@ -1,6 +1,13 @@
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from rest_framework.test import APIClient
+
+
+@pytest.fixture(autouse=True)
+def _clear_throttle_cache():
+    """每測試前清 cache：DRF throttle 計數存 cache，跨測試累積會偽陽性觸發 429。"""
+    cache.clear()
 
 
 @pytest.fixture
