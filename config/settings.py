@@ -83,6 +83,19 @@ REST_FRAMEWORK = {
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': ('rest_framework.permissions.AllowAny',),
+    # 匿名依 IP、登入依 user pk 兩級限流；計數走 Django cache（預設 LocMemCache）。
+    # 天花板一：LocMemCache 為 per-process → 多 worker 下實際上限 ≈ rate × worker 數、
+    #   重啟歸零；換共享 cache backend（Redis）計數即跨行程一致。
+    # 天花板二：匿名以 IP 識別、DRF 預設信任 X-Forwarded-For → 無代理正規化（NUM_PROXIES）
+    #   時可偽造 header 繞過；此限流為縱深防禦，非安全邊界。
+    'DEFAULT_THROTTLE_CLASSES': (
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ),
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '60/min',
+        'user': '300/min',
+    },
 }
 
 # 其餘採 simplejwt 預設（HS256、SIGNING_KEY=SECRET_KEY、Bearer、id/user_id）。
