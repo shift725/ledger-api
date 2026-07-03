@@ -154,7 +154,7 @@ class TestOwnedResourceCrud:
         model.objects.create(user=other_user, name='別人的')
         resp = auth_client.get(url)
         assert resp.status_code == 200
-        assert [row['name'] for row in resp.data] == ['我的']
+        assert [row['name'] for row in resp.data['results']] == ['我的']
 
     def test_cannot_reach_others_object(self, url, model, auth_client, other_user):
         # 別人的物件不在我的 queryset 裡 → 讀/改/刪皆 404（連存在與否都不透露）
@@ -169,6 +169,27 @@ class TestOwnedResourceCrud:
         resp = auth_client.get(f'{url}{obj.id}/')
         assert 'created_at' not in resp.data
         assert 'updated_at' not in resp.data
+
+
+# --- 分頁：掛在 OwnedModelViewSet 基底 → 五資源同一條路徑，用最便宜的 Category 驗證 ---
+
+
+@pytest.mark.django_db
+class TestListPagination:
+    URL = '/api/ledger/categories/'
+
+    def test_envelope_and_page_split(self, auth_client, user):
+        for i in range(25):
+            Category.objects.create(user=user, name=f'分類{i}')
+        page1 = auth_client.get(self.URL)
+        assert page1.status_code == 200
+        assert page1.data['count'] == 25
+        assert len(page1.data['results']) == 20
+        assert page1.data['next'] is not None
+        assert page1.data['previous'] is None
+        page2 = auth_client.get(self.URL, {'page': 2})
+        assert len(page2.data['results']) == 5
+        assert page2.data['next'] is None
 
 
 # --- Account：is_default 切換、刪除 409、balance 唯讀，外加隔離 ---
@@ -348,6 +369,102 @@ class TestTransactionViewSet:
         assert auth_client.get(detail).status_code == 404
         assert auth_client.patch(detail, {'amount': '1.00'}, format='json').status_code == 404
         assert auth_client.delete(detail).status_code == 404
+
+
+# --- Transaction 列表過濾：TransactionFilter 的八個參數與安全行為 ---
+
+
+@pytest.mark.django_db
+class TestTransactionFilters:
+    URL = '/api/ledger/transactions/'
+
+    @pytest.fixture
+    def data(self, user):
+        # 三筆交易蓋出可區分的維度：帳戶×2、類型×2、金額三檔、六七月各有、
+        # 一筆掛 tag、一筆有 description。
+        cash = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+        bank = Account.objects.create(user=user, name='銀行', type=Account.Type.BANK)
+        travel = Tag.objects.create(user=user, name='旅遊')
+        Transaction.objects.create(
+            user=user,
+            account=cash,
+            amount=Decimal('120'),
+            type=Transaction.Type.EXPENSE,
+            name='六月午餐',
+            occurred_at=datetime(2026, 6, 10, 12, 0, tzinfo=UTC),
+        )
+        hotel = Transaction.objects.create(
+            user=user,
+            account=bank,
+            amount=Decimal('3000'),
+            type=Transaction.Type.EXPENSE,
+            name='七月住宿',
+            description='含早餐的溫泉旅館',
+            occurred_at=datetime(2026, 7, 5, 18, 0, tzinfo=UTC),
+        )
+        hotel.tags.add(travel)
+        Transaction.objects.create(
+            user=user,
+            account=bank,
+            amount=Decimal('50000'),
+            type=Transaction.Type.INCOME,
+            name='薪水',
+            occurred_at=datetime(2026, 7, 1, 9, 0, tzinfo=UTC),
+        )
+        return {'cash': cash, 'travel': travel}
+
+    def _names(self, resp):
+        assert resp.status_code == 200
+        return {row['name'] for row in resp.data['results']}
+
+    def test_occurred_range(self, auth_client, data):
+        resp = auth_client.get(
+            self.URL,
+            {'occurred_after': '2026-07-01T00:00:00Z', 'occurred_before': '2026-07-31T23:59:59Z'},
+        )
+        assert self._names(resp) == {'七月住宿', '薪水'}
+
+    def test_account(self, auth_client, data):
+        resp = auth_client.get(self.URL, {'account': str(data['cash'].id)})
+        assert self._names(resp) == {'六月午餐'}
+
+    def test_type(self, auth_client, data):
+        resp = auth_client.get(self.URL, {'type': 'income'})
+        assert self._names(resp) == {'薪水'}
+
+    def test_amount_range_inclusive(self, auth_client, data):
+        # 「超過 1000 的支出」型查詢；min/max 皆含等於（3000 在 amount_min=3000 要出現）
+        resp = auth_client.get(self.URL, {'amount_min': '3000', 'type': 'expense'})
+        assert self._names(resp) == {'七月住宿'}
+        resp = auth_client.get(self.URL, {'amount_max': '120'})
+        assert self._names(resp) == {'六月午餐'}
+
+    def test_tag(self, auth_client, data):
+        resp = auth_client.get(self.URL, {'tag': str(data['travel'].id)})
+        assert self._names(resp) == {'七月住宿'}
+
+    def test_others_account_uuid_yields_empty_not_400(self, auth_client, other_user, data):
+        # 安全：合法但非本人的 UUID 不可變成存在性探測器——一律 200 空，
+        # 與「跨用戶存取回 404 藏存在性」同一原則。
+        theirs = Account.objects.create(user=other_user, name='別人的', type=Account.Type.CASH)
+        resp = auth_client.get(self.URL, {'account': str(theirs.id)})
+        assert resp.status_code == 200
+        assert resp.data['results'] == []
+
+    def test_malformed_uuid_rejected(self, auth_client, data):
+        # 格式錯誤是輸入驗證問題，照常 400
+        assert auth_client.get(self.URL, {'account': 'not-a-uuid'}).status_code == 400
+
+    def test_search_hits_name_and_description(self, auth_client, data):
+        # SearchFilter：一個 ?search= 對 name/description 做 icontains OR
+        assert self._names(auth_client.get(self.URL, {'search': '住宿'})) == {'七月住宿'}
+        assert self._names(auth_client.get(self.URL, {'search': '早餐'})) == {'七月住宿'}
+
+    def test_ordering_by_amount(self, auth_client, data):
+        resp = auth_client.get(self.URL, {'ordering': 'amount'})
+        assert [row['name'] for row in resp.data['results']] == ['六月午餐', '七月住宿', '薪水']
+        resp = auth_client.get(self.URL, {'ordering': '-amount'})
+        assert [row['name'] for row in resp.data['results']] == ['薪水', '七月住宿', '六月午餐']
 
 
 # --- Transaction 餘額維護：建/編輯/刪皆對帳（balance == Σincome − Σexpense）---
@@ -720,10 +837,12 @@ class TestTransactionListQueryCount:
         assert len(ctx) >= 3 * self.N
 
     def test_list_endpoint_query_count_is_fixed(self, auth_client, user, django_assert_num_queries):
-        # 回歸防線：select_related JOIN 一次帶回 account/category、prefetch_related
-        # 一次帶回全部 tags → 固定 2 次、與筆數無關。改壞 queryset/serializer 這裡當場紅。
+        # 回歸防線：分頁 COUNT 一次、select_related JOIN 一次帶回 account/category、
+        # prefetch_related 一次帶回全部 tags → 固定 3 次、與筆數無關。
+        # 改壞 queryset/serializer 這裡當場紅。
         self._build_transactions(user)
-        with django_assert_num_queries(2):
+        with django_assert_num_queries(3):
             resp = auth_client.get(self.URL)
         assert resp.status_code == 200
-        assert len(resp.data) == self.N
+        # N=20 恰等於 page_size：單頁裝滿，斷言才不用管翻頁；要調大 N 先想分頁。
+        assert len(resp.data['results']) == self.N

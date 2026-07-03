@@ -1,10 +1,14 @@
 from django.db import transaction
 from django.db.models import ProtectedError
+from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status, viewsets
+from rest_framework.filters import OrderingFilter, SearchFilter
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from . import services
+from .filters import TransactionFilter
 from .models import Account, Category, SavingsGoal, Tag, Transaction
 from .serializers import (
     AccountSerializer,
@@ -15,16 +19,23 @@ from .serializers import (
 )
 
 
+class LedgerPagination(PageNumberPagination):
+    # 掛在 ledger 基底而非全域 REST_FRAMEWORK：核心 /api/auth/ 端點的回應形狀不受影響。
+    page_size = 20
+
+
 class OwnedModelViewSet(viewsets.ModelViewSet):
     """業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
 
     - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
     - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+    - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
 
     五個資源共用這一份，資安邊界只有一處要審。
     """
 
     permission_classes = [IsAuthenticated]
+    pagination_class = LedgerPagination
 
     def get_queryset(self):
         return super().get_queryset().filter(user=self.request.user)
@@ -76,6 +87,12 @@ class TransactionViewSet(OwnedModelViewSet):
     # M2M 用 prefetch_related（第二條查詢+記憶體組裝）→ 查詢數固定，不隨筆數線性成長（N+1）。
     queryset = Transaction.objects.select_related('account', 'category').prefetch_related('tags')
     serializer_class = TransactionSerializer
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_class = TransactionFilter
+    search_fields = ['name', 'description']
+    # ?ordering=amount 在等值金額上頁界順序不保證穩定（非唯一排序鍵＋offset 分頁），
+    # 個人規模可接受；client 要穩定可自帶次鍵 ?ordering=amount,-occurred_at。
+    ordering_fields = ['occurred_at', 'amount']
 
     def perform_create(self, serializer):
         with transaction.atomic():
