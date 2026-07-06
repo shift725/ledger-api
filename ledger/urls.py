@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     AccountViewSet,
     CategoryViewSet,
+    ReportViewSet,
     SavingsGoalViewSet,
     TagViewSet,
     TransactionViewSet,
@@ -15,5 +16,6 @@ router.register('categories', CategoryViewSet, basename='category')
 router.register('tags', TagViewSet, basename='tag')
 router.register('transactions', TransactionViewSet, basename='transaction')
 router.register('savings-goals', SavingsGoalViewSet, basename='savings-goal')
+router.register('reports', ReportViewSet, basename='report')
 
 urlpatterns = router.urls

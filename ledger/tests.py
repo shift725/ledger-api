@@ -5,7 +5,7 @@
 """
 
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest import mock
 
@@ -21,6 +21,7 @@ except ImportError as exc:
     raise unittest.SkipTest('ledger 測試為 pytest 專屬，容器 Django runner 略過') from exc
 from django.db import IntegrityError, connection, transaction
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from ledger import services
@@ -855,3 +856,480 @@ class TestTransactionListQueryCount:
         assert resp.status_code == 200
         # N=20 恰等於 page_size：單頁裝滿，斷言才不用管翻頁；要調大 N 先想分頁。
         assert len(resp.data['results']) == self.N
+
+
+# --- 報表：即時餘額（balance/）與當日統計（today/）---
+
+
+@pytest.mark.django_db
+class TestReportBalance:
+    URL = '/api/ledger/reports/balance/'
+
+    def test_requires_authentication(self):
+        assert APIClient().get(self.URL).status_code == 401
+
+    def test_overview_sums_and_isolates(self, auth_client, user, other_user):
+        Account.objects.create(
+            user=user, name='現金', type=Account.Type.CASH, balance=Decimal('1000.00')
+        )
+        bank = Account.objects.create(
+            user=user,
+            name='銀行',
+            type=Account.Type.BANK,
+            balance=Decimal('25000.00'),
+            is_default=True,
+        )
+        # 別人的帳戶不得混入總額或清單
+        Account.objects.create(
+            user=other_user, name='別人的', type=Account.Type.CASH, balance=Decimal('99999.00')
+        )
+        resp = auth_client.get(self.URL)
+        assert resp.status_code == 200
+        assert resp.data['total_balance'] == '26000.00'  # 1000 + 25000，金額為字串
+        # 順序沿 Account 預設排序（-is_default, name）→ 預設帳戶在前
+        assert resp.data['accounts'][0] == {
+            'id': str(bank.id),
+            'name': '銀行',
+            'type': 'bank',
+            'balance': '25000.00',
+        }
+        assert [row['name'] for row in resp.data['accounts']] == ['銀行', '現金']
+
+    def test_no_accounts_returns_zero(self, auth_client, user):
+        resp = auth_client.get(self.URL)
+        assert resp.status_code == 200
+        assert resp.data['total_balance'] == '0.00'
+        assert resp.data['accounts'] == []
+
+    def test_query_count_is_one(self, auth_client, user, django_assert_num_queries):
+        for i in range(3):
+            Account.objects.create(
+                user=user, name=f'帳戶{i}', type=Account.Type.CASH, balance=Decimal('100.00')
+            )
+        with django_assert_num_queries(1):  # 一次取回全部帳戶、Python 端加總
+            assert auth_client.get(self.URL).status_code == 200
+
+
+@pytest.mark.django_db
+class TestReportToday:
+    URL = '/api/ledger/reports/today/'
+
+    def test_requires_authentication(self):
+        assert APIClient().get(self.URL).status_code == 401
+
+    def test_counts_taipei_day_not_utc(self, auth_client, user):
+        # 台北今日 00:30 == UTC 昨日 16:30：用 UTC 日界會漏算這兩筆 → 專證台北邊界。
+        # 以 localtime(now) 造「今日」某時刻，跑在今日任何時點都歸今日、不 flaky。
+        acc = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+        now_local = timezone.localtime()
+        today_0030 = now_local.replace(hour=0, minute=30, second=0, microsecond=0)
+        yesterday_same = today_0030 - timedelta(days=1)
+        Transaction.objects.create(
+            user=user,
+            account=acc,
+            amount=Decimal('120.00'),
+            type=Transaction.Type.EXPENSE,
+            occurred_at=today_0030,
+        )
+        Transaction.objects.create(
+            user=user,
+            account=acc,
+            amount=Decimal('500.00'),
+            type=Transaction.Type.INCOME,
+            occurred_at=today_0030,
+        )
+        # 昨天同一時刻的一筆：不得計入今日
+        Transaction.objects.create(
+            user=user,
+            account=acc,
+            amount=Decimal('999.00'),
+            type=Transaction.Type.EXPENSE,
+            occurred_at=yesterday_same,
+        )
+        resp = auth_client.get(self.URL)
+        assert resp.status_code == 200
+        assert resp.data['date'] == now_local.date().isoformat()
+        assert resp.data['expense'] == '120.00'
+        assert resp.data['income'] == '500.00'
+        assert resp.data['net'] == '380.00'  # 500 − 120（收入減支出）
+
+    def test_empty_day_returns_zeros(self, auth_client, user):
+        resp = auth_client.get(self.URL)
+        assert resp.status_code == 200
+        assert resp.data['expense'] == '0.00'
+        assert resp.data['income'] == '0.00'
+        assert resp.data['net'] == '0.00'
+
+    def test_query_count_is_one(self, auth_client, user, django_assert_num_queries):
+        acc = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+        for _ in range(3):  # occurred_at 預設 now() = 今日
+            Transaction.objects.create(
+                user=user, account=acc, amount=Decimal('10.00'), type=Transaction.Type.EXPENSE
+            )
+        with django_assert_num_queries(1):  # 單一條件聚合
+            assert auth_client.get(self.URL).status_code == 200
+
+
+# --- 報表：月度收支（summary/、by-category/、by-tag/）---
+
+
+@pytest.mark.django_db
+class TestReportSummary:
+    SUMMARY = '/api/ledger/reports/summary/'
+    BY_CATEGORY = '/api/ledger/reports/summary/by-category/'
+    BY_TAG = '/api/ledger/reports/summary/by-tag/'
+
+    @pytest.fixture
+    def july(self, user):
+        # 2026 七月（台北）的一組資料，含月界那筆：台北 7/1 00:30 == UTC 6/30 16:30。
+        acc = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+        food = Category.objects.create(user=user, name='飲食')
+        salary = Category.objects.create(user=user, name='薪資')
+        travel = Tag.objects.create(user=user, name='旅遊')
+        work = Tag.objects.create(user=user, name='工作')
+        # 月界：UTC 看是六月，台北看是七月 → 必須歸七月
+        boundary = Transaction.objects.create(
+            user=user,
+            account=acc,
+            category=food,
+            amount=Decimal('100.00'),
+            type=Transaction.Type.EXPENSE,
+            occurred_at=datetime(2026, 6, 30, 16, 30, tzinfo=UTC),
+        )
+        boundary.tags.add(travel)
+        # 七月收入（分類 薪資、無標籤）
+        Transaction.objects.create(
+            user=user,
+            account=acc,
+            category=salary,
+            amount=Decimal('5000.00'),
+            type=Transaction.Type.INCOME,
+            occurred_at=datetime(2026, 7, 10, 2, 0, tzinfo=UTC),  # 台北 7/10 10:00
+        )
+        # 七月支出（未分類、掛兩標籤）
+        multi = Transaction.objects.create(
+            user=user,
+            account=acc,
+            category=None,
+            amount=Decimal('300.00'),
+            type=Transaction.Type.EXPENSE,
+            occurred_at=datetime(2026, 7, 15, 5, 0, tzinfo=UTC),
+        )
+        multi.tags.add(travel, work)
+        # 六月一筆（台北 6/15）：不得進七月
+        Transaction.objects.create(
+            user=user,
+            account=acc,
+            category=food,
+            amount=Decimal('999.00'),
+            type=Transaction.Type.EXPENSE,
+            occurred_at=datetime(2026, 6, 15, 12, 0, tzinfo=UTC),
+        )
+        return {'travel': travel, 'work': work}
+
+    def test_requires_authentication(self):
+        assert APIClient().get(self.SUMMARY).status_code == 401
+
+    def test_specified_month(self, auth_client, july):
+        resp = auth_client.get(self.SUMMARY, {'year': 2026, 'month': 7})
+        assert resp.status_code == 200
+        # income 5000；expense 100（邊界）+ 300 = 400；net 4600。六月的 999 不算。
+        assert resp.data == {
+            'year': 2026,
+            'month': 7,
+            'income': '5000.00',
+            'expense': '400.00',
+            'net': '4600.00',
+        }
+
+    def test_taipei_month_boundary(self, auth_client, july):
+        # 邊界那筆歸七月、不歸六月
+        june = auth_client.get(self.SUMMARY, {'year': 2026, 'month': 6})
+        assert june.data['expense'] == '999.00'  # 只有那筆六月支出
+        july_resp = auth_client.get(self.SUMMARY, {'year': 2026, 'month': 7})
+        assert july_resp.data['expense'] == '400.00'  # 含邊界 100、不含 999
+
+    def test_defaults_to_current_taipei_month(self, auth_client, user):
+        acc = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+        now_local = timezone.localtime()
+        Transaction.objects.create(  # occurred_at 預設 now() = 當月
+            user=user, account=acc, amount=Decimal('42.00'), type=Transaction.Type.EXPENSE
+        )
+        resp = auth_client.get(self.SUMMARY)
+        assert resp.status_code == 200
+        assert resp.data['year'] == now_local.year
+        assert resp.data['month'] == now_local.month
+        assert resp.data['expense'] == '42.00'
+
+    def test_empty_month_zeros(self, auth_client, user):
+        resp = auth_client.get(self.SUMMARY, {'year': 2020, 'month': 1})
+        assert resp.status_code == 200
+        assert resp.data == {
+            'year': 2020,
+            'month': 1,
+            'income': '0.00',
+            'expense': '0.00',
+            'net': '0.00',
+        }
+
+    def test_invalid_params_return_400(self, auth_client, user):
+        assert auth_client.get(self.SUMMARY, {'year': 2026, 'month': 13}).status_code == 400
+        assert auth_client.get(self.SUMMARY, {'month': 0}).status_code == 400
+        assert auth_client.get(self.SUMMARY, {'year': 'abc'}).status_code == 400
+        assert auth_client.get(self.SUMMARY, {'year': 10000}).status_code == 400
+
+    def test_by_category_buckets_and_clean_sum(self, auth_client, july):
+        resp = auth_client.get(self.BY_CATEGORY, {'year': 2026, 'month': 7})
+        assert resp.status_code == 200
+        cats = resp.data['categories']
+        by_name = {c['category_name']: c for c in cats}
+        assert by_name['飲食']['expense'] == '100.00'
+        assert by_name['飲食']['income'] == '0.00'
+        assert by_name['薪資']['income'] == '5000.00'
+        assert by_name['薪資']['expense'] == '0.00'
+        # 未分類桶：category_id / category_name 皆 null
+        uncat = next(c for c in cats if c['category_id'] is None)
+        assert uncat['category_name'] is None
+        assert uncat['expense'] == '300.00'
+        assert cats[0]['category_id'] is None  # expense 300 最高 → 降冪排最前
+        # 乾淨加總不變式：各桶加總 == summary 總額（單值 FK，不重疊）
+        summary = auth_client.get(self.SUMMARY, {'year': 2026, 'month': 7}).data
+        assert str(sum(Decimal(c['income']) for c in cats)) == summary['income']
+        assert str(sum(Decimal(c['expense']) for c in cats)) == summary['expense']
+
+    def test_by_tag_overlaps_and_untagged_absent(self, auth_client, july):
+        resp = auth_client.get(self.BY_TAG, {'year': 2026, 'month': 7})
+        assert resp.status_code == 200
+        tags = {t['tag_name']: t for t in resp.data['tags']}
+        # 旅遊掛 boundary(100)+multi(300) → 400；工作只掛 multi(300)
+        assert tags['旅遊']['expense'] == '400.00'
+        assert tags['工作']['expense'] == '300.00'
+        # 無標籤的薪資那筆不出現；旅遊+工作合計 700 > summary 400（重疊維度不可加總）
+        assert set(tags) == {'旅遊', '工作'}
+
+    def test_query_counts_are_one_each(self, auth_client, july, django_assert_num_queries):
+        params = {'year': 2026, 'month': 7}
+        with django_assert_num_queries(1):
+            auth_client.get(self.SUMMARY, params)
+        with django_assert_num_queries(1):
+            auth_client.get(self.BY_CATEGORY, params)
+        with django_assert_num_queries(1):
+            auth_client.get(self.BY_TAG, params)
+
+
+# --- 報表：逐月餘額歷史（balance-history/，TruncMonth＋running sum＋forward-fill）---
+
+
+@pytest.mark.django_db
+class TestReportBalanceHistory:
+    URL = '/api/ledger/reports/balance-history/'
+    TXN = '/api/ledger/transactions/'
+
+    def _post(self, client, acc, amount, type_, occurred_at):
+        # 走 API 建交易 → services 維護 Account.balance（供末月不變式對帳）
+        resp = client.post(
+            self.TXN,
+            {
+                'account': str(acc.id),
+                'amount': amount,
+                'type': type_,
+                'occurred_at': occurred_at,
+            },
+            format='json',
+        )
+        assert resp.status_code == 201
+        return resp
+
+    def test_requires_authentication(self):
+        assert APIClient().get(self.URL).status_code == 401
+
+    def test_running_sum_forward_fill_and_invariant(self, auth_client, user):
+        acc = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+        # 五月 +100 收入、七月 −30 支出（六月無交易 → 缺月）。UTC 時刻選在台北同月內。
+        self._post(auth_client, acc, '100.00', 'income', '2026-05-10T02:00:00Z')
+        self._post(auth_client, acc, '30.00', 'expense', '2026-07-15T05:00:00Z')
+        resp = auth_client.get(self.URL)
+        assert resp.status_code == 200
+        entry = next(e for e in resp.data if e['account_id'] == str(acc.id))
+        months = {mo['month']: mo['balance'] for mo in entry['months']}
+        assert months['2026-05'] == '100.00'
+        assert months['2026-06'] == '100.00'  # 缺月 forward-fill：沿用五月餘額
+        assert months['2026-07'] == '70.00'  # 100 − 30
+        # 不變式：最後一月餘額 == Account.balance 現值
+        acc.refresh_from_db()
+        assert acc.balance == Decimal('70.00')
+        assert Decimal(entry['months'][-1]['balance']) == acc.balance
+
+    def test_taipei_month_boundary(self, auth_client, user):
+        acc = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+        # 台北 7/1 00:30 == UTC 6/30 16:30：TruncMonth 應歸七月、不歸六月
+        self._post(auth_client, acc, '100.00', 'income', '2026-06-30T16:30:00Z')
+        resp = auth_client.get(self.URL)
+        entry = next(e for e in resp.data if e['account_id'] == str(acc.id))
+        assert entry['months'][0]['month'] == '2026-07'  # 首月＝七月（非六月）
+        months = {mo['month']: mo['balance'] for mo in entry['months']}
+        assert months['2026-07'] == '100.00'
+
+    def test_account_without_transactions_has_empty_months(self, auth_client, user):
+        Account.objects.create(user=user, name='空帳戶', type=Account.Type.CASH)
+        resp = auth_client.get(self.URL)
+        entry = next(e for e in resp.data if e['account_name'] == '空帳戶')
+        assert entry['months'] == []
+
+    def test_isolation(self, auth_client, user, other_user):
+        Account.objects.create(user=other_user, name='別人的', type=Account.Type.CASH)
+        mine = Account.objects.create(user=user, name='我的', type=Account.Type.CASH)
+        resp = auth_client.get(self.URL)
+        assert str(mine.id) in {e['account_id'] for e in resp.data}
+        assert all(e['account_name'] != '別人的' for e in resp.data)
+
+    def test_query_count_is_two(self, auth_client, user, django_assert_num_queries):
+        acc = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+        for month in (5, 6, 7):
+            self._post(auth_client, acc, '10.00', 'expense', f'2026-{month:02d}-15T05:00:00Z')
+        with django_assert_num_queries(2):  # 帳戶清單 + 每月淨變化聚合（與筆數／月份數無關）
+            assert auth_client.get(self.URL).status_code == 200
+
+
+# --- 報表：儲蓄目標達成狀態（savings-goal-status/，月度／年度雙態）---
+
+
+@pytest.mark.django_db
+class TestReportSavingsGoalStatus:
+    URL = '/api/ledger/reports/savings-goal-status/'
+
+    def _account(self, user):
+        return Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+
+    def _txn(self, user, acc, amount, type_, occurred_at):
+        Transaction.objects.create(
+            user=user, account=acc, amount=Decimal(amount), type=type_, occurred_at=occurred_at
+        )
+
+    def test_requires_authentication(self):
+        assert APIClient().get(self.URL).status_code == 401
+
+    def test_monthly_achieved(self, auth_client, user):
+        acc = self._account(user)
+        SavingsGoal.objects.create(
+            user=user,
+            period_type=SavingsGoal.PeriodType.MONTHLY,
+            year=2026,
+            month=7,
+            amount=Decimal('10000.00'),
+        )
+        # 七月 net = 50000 − 38000 = 12000 >= 10000 → 達成、difference 正
+        self._txn(
+            user, acc, '50000.00', Transaction.Type.INCOME, datetime(2026, 7, 10, 2, 0, tzinfo=UTC)
+        )
+        self._txn(
+            user, acc, '38000.00', Transaction.Type.EXPENSE, datetime(2026, 7, 20, 2, 0, tzinfo=UTC)
+        )
+        resp = auth_client.get(self.URL, {'year': 2026, 'month': 7})
+        assert resp.status_code == 200
+        assert resp.data['period_type'] == 'monthly'
+        assert resp.data['year'] == 2026
+        assert resp.data['month'] == 7
+        assert resp.data['goal_amount'] == '10000.00'
+        assert resp.data['actual_net'] == '12000.00'
+        assert resp.data['difference'] == '2000.00'  # actual − goal
+        assert resp.data['achieved'] is True
+
+    def test_monthly_not_achieved(self, auth_client, user):
+        acc = self._account(user)
+        SavingsGoal.objects.create(
+            user=user,
+            period_type=SavingsGoal.PeriodType.MONTHLY,
+            year=2026,
+            month=7,
+            amount=Decimal('10000.00'),
+        )
+        # net = 5000 − 3000 = 2000 < 10000 → 未達成、difference 負
+        self._txn(
+            user, acc, '5000.00', Transaction.Type.INCOME, datetime(2026, 7, 10, 2, 0, tzinfo=UTC)
+        )
+        self._txn(
+            user, acc, '3000.00', Transaction.Type.EXPENSE, datetime(2026, 7, 12, 2, 0, tzinfo=UTC)
+        )
+        resp = auth_client.get(self.URL, {'year': 2026, 'month': 7})
+        assert resp.data['actual_net'] == '2000.00'
+        assert resp.data['difference'] == '-8000.00'
+        assert resp.data['achieved'] is False
+
+    def test_goal_unset_returns_null_but_net_computed(self, auth_client, user):
+        acc = self._account(user)
+        self._txn(
+            user, acc, '5000.00', Transaction.Type.INCOME, datetime(2026, 7, 10, 2, 0, tzinfo=UTC)
+        )
+        self._txn(
+            user, acc, '2000.00', Transaction.Type.EXPENSE, datetime(2026, 7, 12, 2, 0, tzinfo=UTC)
+        )
+        resp = auth_client.get(self.URL, {'year': 2026, 'month': 7})
+        assert resp.status_code == 200
+        # 未設目標是正常狀態（前端要顯示它）→ 不 404，goal 相關欄位 null
+        assert resp.data['goal_amount'] is None
+        assert resp.data['difference'] is None
+        assert resp.data['achieved'] is None
+        assert resp.data['actual_net'] == '3000.00'  # actual_net 仍照算
+
+    def test_yearly_when_month_omitted(self, auth_client, user):
+        acc = self._account(user)
+        SavingsGoal.objects.create(
+            user=user,
+            period_type=SavingsGoal.PeriodType.YEARLY,
+            year=2026,
+            month=None,
+            amount=Decimal('100000.00'),
+        )
+        # 全年跨兩月 net = (50000 + 30000) − 10000 = 70000 < 100000 → 未達成
+        self._txn(
+            user, acc, '50000.00', Transaction.Type.INCOME, datetime(2026, 3, 10, 2, 0, tzinfo=UTC)
+        )
+        self._txn(
+            user, acc, '10000.00', Transaction.Type.EXPENSE, datetime(2026, 3, 15, 2, 0, tzinfo=UTC)
+        )
+        self._txn(
+            user, acc, '30000.00', Transaction.Type.INCOME, datetime(2026, 9, 10, 2, 0, tzinfo=UTC)
+        )
+        resp = auth_client.get(self.URL, {'year': 2026})  # 省略 month → 年度
+        assert resp.status_code == 200
+        assert resp.data['period_type'] == 'yearly'
+        assert resp.data['month'] is None
+        assert resp.data['goal_amount'] == '100000.00'
+        assert resp.data['actual_net'] == '70000.00'
+        assert resp.data['difference'] == '-30000.00'
+        assert resp.data['achieved'] is False
+
+    def test_query_count_is_two(self, auth_client, user, django_assert_num_queries):
+        acc = self._account(user)
+        SavingsGoal.objects.create(
+            user=user,
+            period_type=SavingsGoal.PeriodType.MONTHLY,
+            year=2026,
+            month=7,
+            amount=Decimal('10000.00'),
+        )
+        self._txn(
+            user, acc, '5000.00', Transaction.Type.INCOME, datetime(2026, 7, 10, 2, 0, tzinfo=UTC)
+        )
+        with django_assert_num_queries(2):  # goal lookup + 期間淨額聚合
+            assert auth_client.get(self.URL, {'year': 2026, 'month': 7}).status_code == 200
+
+
+# --- 報表：全端點未授權掃描（7 支迴圈打 → 皆 401）---
+
+
+@pytest.mark.django_db
+def test_all_report_endpoints_require_authentication():
+    client = APIClient()
+    paths = [
+        '/api/ledger/reports/balance/',
+        '/api/ledger/reports/today/',
+        '/api/ledger/reports/summary/',
+        '/api/ledger/reports/summary/by-category/',
+        '/api/ledger/reports/summary/by-tag/',
+        '/api/ledger/reports/balance-history/',
+        '/api/ledger/reports/savings-goal-status/',
+    ]
+    for path in paths:
+        assert client.get(path).status_code == 401, path

@@ -65,7 +65,7 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 LANGUAGE_CODE = 'en-us'
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Asia/Taipei'
 USE_I18N = True
 USE_TZ = True
 
@@ -91,10 +91,15 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_CLASSES': (
         'rest_framework.throttling.AnonRateThrottle',
         'rest_framework.throttling.UserRateThrottle',
+        # 對未宣告 throttle_scope 的 view 是 no-op；只有標了 scope 的 action 受該桶限制。
+        'rest_framework.throttling.ScopedRateThrottle',
     ),
     'DEFAULT_THROTTLE_RATES': {
         'anon': '60/min',
         'user': '300/min',
+        # 按成本配桶、非按 URL 前綴：只有 balance-history 是全歷史分組、讀取量隨終身交易數成長，
+        # 掛這桶；首頁高頻的 balance/today 維持 user 級，不被連坐限死。
+        'reports-heavy': '20/min',
     },
 }
 
