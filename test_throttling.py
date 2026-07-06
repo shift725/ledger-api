@@ -47,3 +47,40 @@ class ThrottlingTests(APITestCase):
         for _ in range(3):
             self.assertEqual(self.client.get(url).status_code, status.HTTP_200_OK)
         self.assertEqual(self.client.get(url).status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+
+
+class ScopedThrottlingTests(APITestCase):
+    """scoped throttle：只有 balance-history 掛 reports-heavy 桶，便宜端點不連坐。
+
+    自帶 rates patch——user 保持 300/min（沿用上面的 3/min 會讓 user 桶搶先觸發、測錯對象）；
+    reports-heavy 壓到 3/min 免真打 21 發。
+    """
+
+    BALANCE_HISTORY = '/api/ledger/reports/balance-history/'
+    BALANCE = '/api/ledger/reports/balance/'
+
+    def setUp(self):
+        cache.clear()
+        self._orig_rates = SimpleRateThrottle.THROTTLE_RATES
+        SimpleRateThrottle.THROTTLE_RATES = {
+            'anon': '60/min',
+            'user': '300/min',  # 保持高位，隔離出 reports-heavy 桶（否則 user 桶先於 3 發爆）
+            'reports-heavy': '3/min',
+        }
+        self.user = User.objects.create_user(
+            username='u', email='u@example.com', password='pw-12345'
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def tearDown(self):
+        SimpleRateThrottle.THROTTLE_RATES = self._orig_rates
+        cache.clear()
+
+    def test_balance_history_throttled_but_cheap_endpoint_not(self):
+        for _ in range(3):
+            self.assertEqual(self.client.get(self.BALANCE_HISTORY).status_code, status.HTTP_200_OK)
+        resp = self.client.get(self.BALANCE_HISTORY)
+        self.assertEqual(resp.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertTrue(resp.has_header('Retry-After'))
+        # 同期打便宜的 balance/：不在 reports-heavy 桶 → 仍 200（桶隔離實證）
+        self.assertEqual(self.client.get(self.BALANCE).status_code, status.HTTP_200_OK)

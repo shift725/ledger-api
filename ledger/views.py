@@ -1,13 +1,16 @@
 from django.db import transaction
 from django.db.models import ProtectedError
+from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import status, viewsets
+from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from . import services
+from . import reports, services
 from .filters import TransactionFilter
 from .models import Account, Category, SavingsGoal, Tag, Transaction
 from .serializers import (
@@ -131,3 +134,84 @@ class TransactionViewSet(OwnedModelViewSet):
 class SavingsGoalViewSet(OwnedModelViewSet):
     queryset = SavingsGoal.objects.all()
     serializer_class = SavingsGoalSerializer
+
+
+def _int_param(raw, *, default, lo, hi, name):
+    """query 整數參數轉型並驗範圍；未帶回 default，非法拋 ValidationError（DRF → 400）。
+
+    先驗參數再進 reports，避免非法 year/month 讓 datetime() 在聚合層炸 500。
+    """
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise ValidationError({name: f'必須是 {lo}–{hi} 的整數'})
+    if not lo <= value <= hi:
+        raise ValidationError({name: f'必須介於 {lo}–{hi} 之間'})
+    return value
+
+
+class ReportViewSet(viewsets.ViewSet):
+    """唯讀報表端點集合（/api/ledger/reports/…）：各 action 委派 reports.py 的純函式。
+
+    用 ViewSet（非 ModelViewSet）：報表不是 CRUD 資源、無單一 queryset/序列化器；每支都吃
+    request.user 過濾，資安邊界落在 reports 函式內。
+    """
+
+    permission_classes = [IsAuthenticated]
+    # 預設無 throttle scope（ScopedRateThrottle 對 None 是 no-op）。設為 class 屬性，個別 @action
+    # 才能用 initkwargs 覆寫成別的桶——DRF as_view 會檢查該屬性存在、缺了報 TypeError。
+    throttle_scope = None
+
+    @staticmethod
+    def _period(request):
+        """取 year/month（未帶＝當前時區當月），驗 year 1–9999、month 1–12。"""
+        now = timezone.localtime()
+        return (
+            _int_param(
+                request.query_params.get('year'), default=now.year, lo=1, hi=9999, name='year'
+            ),
+            _int_param(
+                request.query_params.get('month'), default=now.month, lo=1, hi=12, name='month'
+            ),
+        )
+
+    @action(detail=False)
+    def balance(self, request):
+        return Response(reports.balance_overview(request.user))
+
+    @action(detail=False)
+    def today(self, request):
+        return Response(reports.today_summary(request.user))
+
+    @action(detail=False)
+    def summary(self, request):
+        year, month = self._period(request)
+        return Response(reports.month_summary(request.user, year, month))
+
+    @action(detail=False, url_path='summary/by-category')
+    def summary_by_category(self, request):
+        year, month = self._period(request)
+        return Response(reports.summary_by_category(request.user, year, month))
+
+    @action(detail=False, url_path='summary/by-tag')
+    def summary_by_tag(self, request):
+        year, month = self._period(request)
+        return Response(reports.summary_by_tag(request.user, year, month))
+
+    @action(detail=False, url_path='balance-history', throttle_scope='reports-heavy')
+    def balance_history(self, request):
+        return Response(reports.balance_history(request.user))
+
+    @action(detail=False, url_path='savings-goal-status')
+    def savings_goal_status(self, request):
+        # 與 _period 不同：month 選填（省略＝年度、不套當月預設）；year 省略＝當年。
+        now = timezone.localtime()
+        year = _int_param(
+            request.query_params.get('year'), default=now.year, lo=1, hi=9999, name='year'
+        )
+        month = _int_param(
+            request.query_params.get('month'), default=None, lo=1, hi=12, name='month'
+        )
+        return Response(reports.savings_goal_status(request.user, year, month))

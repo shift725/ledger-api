@@ -40,7 +40,7 @@ def carry_forward_savings_goal(user):
 
     以 timezone.localtime(timezone.now()) 的當下年月為準（與交易的 occurred_at 無關）→
     補登/匯入過去月份的交易不會補建歷史月目標；歷史月若缺由使用者事後手動 CRUD。
-    localtime 依 settings.TIME_ZONE 轉時區（目前 UTC）→ 當下月綁專案時區、不寫死。
+    localtime 依 settings.TIME_ZONE 轉時區（目前 Asia/Taipei）→ 當下月綁專案時區、不寫死。
 
     冪等 + 並發安全：get_or_create 靠唯一約束 (user, period_type, year, month)，
     內部 savepoint 吞 IntegrityError 後重查 → 新月同時兩請求也只生一筆，在外層 atomic 內安全。
