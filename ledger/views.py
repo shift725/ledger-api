@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from django.db import transaction
 from django.db.models import ProtectedError
 from django.utils import timezone
@@ -152,6 +154,19 @@ def _int_param(raw, *, default, lo, hi, name):
     return value
 
 
+def _date_param(raw, *, name):
+    """query 日期參數轉 date；未帶或格式錯拋 ValidationError（→ 400）。
+
+    鎖 strptime('%Y-%m-%d')；不用 fromisoformat（3.11 起連 '20260706' 等都收，契約會漂）。
+    """
+    if raw is None:
+        raise ValidationError({name: '必填，格式須為 YYYY-MM-DD'})
+    try:
+        return datetime.strptime(raw, '%Y-%m-%d').date()
+    except ValueError:
+        raise ValidationError({name: '格式須為 YYYY-MM-DD'})
+
+
 class ReportViewSet(viewsets.ViewSet):
     """唯讀報表端點集合（/api/ledger/reports/…）：各 action 委派 reports.py 的純函式。
 
@@ -199,6 +214,15 @@ class ReportViewSet(viewsets.ViewSet):
     def summary_by_tag(self, request):
         year, month = self._period(request)
         return Response(reports.summary_by_tag(request.user, year, month))
+
+    @action(detail=False, url_path='summary/range')
+    def summary_range(self, request):
+        # start/end 皆必填、鎖 YYYY-MM-DD、當前時區解讀；end 含當日（reports 端轉半開區間）。
+        start = _date_param(request.query_params.get('start'), name='start')
+        end = _date_param(request.query_params.get('end'), name='end')
+        if start > end:
+            raise ValidationError({'start': 'start 不可晚於 end'})
+        return Response(reports.range_summary(request.user, start, end))
 
     @action(detail=False, url_path='balance-history', throttle_scope='reports-heavy')
     def balance_history(self, request):
