@@ -56,8 +56,11 @@ class TransactionSerializer(serializers.ModelSerializer):
         # 資安關鍵：把關聯欄位的可選 queryset 收斂到當前使用者。
         # 預設是 <Model>.objects.all()，否則 client 能引用別人的 account/category/tag
         # （掛到自己的交易，或用 id 探測別人的資料是否存在）。
+        # 條件是「已認證」而非「有 request」：真實流量必經 view 的 IsAuthenticated，
+        # 到得了這裡的一定是登入者；唯一的匿名來源是 OpenAPI 產生器的假 request
+        # （user=AnonymousUser），拿它過濾 UUID 外鍵會炸，略過收斂讓 schema 推導用預設欄位。
         request = self.context.get('request')
-        if request is not None:
+        if request is not None and request.user.is_authenticated:
             user = request.user
             self.fields['account'].queryset = Account.objects.filter(user=user)
             self.fields['category'].queryset = Category.objects.filter(user=user)

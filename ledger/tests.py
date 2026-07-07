@@ -4,6 +4,7 @@
 用 savepoint 框住才不會讓同一測試的後續 ORM 操作炸掉。複用 conftest 的 `user` fixture。
 """
 
+import io
 import threading
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -19,9 +20,11 @@ except ImportError as exc:
     import unittest
 
     raise unittest.SkipTest('ledger 測試為 pytest 專屬，容器 Django runner 略過') from exc
+from django.core.management import call_command
 from django.db import IntegrityError, connection, transaction
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
+from drf_spectacular.generators import SchemaGenerator
 from rest_framework.test import APIClient
 
 from ledger import services
@@ -1554,3 +1557,64 @@ def test_all_report_endpoints_require_authentication():
     ]
     for path in paths:
         assert client.get(path).status_code == 401, path
+
+
+@pytest.mark.django_db
+class TestOpenAPISchema:
+    """schema／docs 端點與 schema 品質看守。
+
+    兩支端點刻意匿名可讀（schema 是對外契約、不含業務資料），因此不進上面的 401 掃描；
+    validate 包成測試＝不動 CI 設定就有 schema 規格閘門。
+    """
+
+    def test_schema_endpoint_public(self):
+        assert APIClient().get('/api/schema/').status_code == 200
+
+    def test_docs_page_public(self):
+        assert APIClient().get('/api/docs/').status_code == 200
+
+    def test_schema_covers_all_api_surfaces(self):
+        # 抽查三個來源各一段：核心繼承（auth）、router CRUD、報表 @action——
+        # 任何一塊從 schema 消失（URLconf 改壞、decorator 蓋掉 action）都會在這裡現形。
+        paths = SchemaGenerator().get_schema(request=None, public=True)['paths']
+        for sample in (
+            '/api/auth/login/',
+            '/api/ledger/transactions/',
+            '/api/ledger/reports/summary/range/',
+            '/api/ledger/reports/balance-history/',
+        ):
+            assert sample in paths, sample
+
+    def test_schema_passes_spectacular_validation(self):
+        # --validate 在產出當下跑 OpenAPI 規格檢查，違規直接拋錯；stdout 吞掉不吐整份 schema。
+        call_command('spectacular', '--validate', stdout=io.StringIO())
+
+    def test_write_operations_expose_request_body(self):
+        # 回歸看守：schema 產生器的假 request 帶 AnonymousUser（不是 None）——serializer
+        # 或 get_queryset 拿它過濾 UUID 外鍵會炸，spectacular 只降級成警告、整個 view 的
+        # 推導被安靜丟棄，症狀是文件頁 Try it out 沒有 request body。五資源 POST 必帶 body。
+        paths = SchemaGenerator().get_schema(request=None, public=True)['paths']
+        for resource in ('accounts', 'categories', 'tags', 'transactions', 'savings-goals'):
+            assert 'requestBody' in paths[f'/api/ledger/{resource}/']['post'], resource
+
+    def test_account_type_enum_named_stably(self):
+        # Account.Type 出現在 CRUD 與報表兩個 component，enum 撞名時 spectacular 會退化成
+        # 雜湊尾名（Type346Enum 之類）——名字不穩，下游型別產生器每次生出不同識別字。
+        # ENUM_NAME_OVERRIDES 釘住後，這裡看守它一直在。
+        comps = SchemaGenerator().get_schema(request=None, public=True)['components']['schemas']
+        assert 'AccountTypeEnum' in comps
+
+    def test_report_money_fields_are_strings(self):
+        # 報表金額在 schema 必須是 string(decimal)：client 拿 schema 生型別，
+        # 標成 number 等於邀請浮點解析。抽查三個代表 component 的金額欄位。
+        components = SchemaGenerator().get_schema(request=None, public=True)['components'][
+            'schemas'
+        ]
+        for component, field in (
+            ('BalanceOverview', 'total_balance'),
+            ('MonthSummary', 'net'),
+            ('SavingsGoalStatus', 'actual_net'),
+        ):
+            prop = components[component]['properties'][field]
+            assert prop['type'] == 'string', (component, field)
+            assert prop['format'] == 'decimal', (component, field)

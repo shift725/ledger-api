@@ -21,6 +21,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',  # 登出黑名單
     'django_filters',
+    'drf_spectacular',
     'accounts',
     'ledger',
 ]
@@ -83,6 +84,8 @@ REST_FRAMEWORK = {
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': ('rest_framework.permissions.AllowAny',),
+    # OpenAPI 3 schema 由 drf-spectacular 從 view/serializer 推導（code-first，文件不另外手維護）。
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     # 匿名依 IP、登入依 user pk 兩級限流；計數走 Django cache（預設 LocMemCache）。
     # 天花板一：LocMemCache 為 per-process → 多 worker 下實際上限 ≈ rate × worker 數、
     #   重啟歸零；換共享 cache backend（Redis）計數即跨行程一致。
@@ -100,6 +103,20 @@ REST_FRAMEWORK = {
         # 按成本配桶、非按 URL 前綴：只有 balance-history 是全歷史分組、讀取量隨終身交易數成長，
         # 掛這桶；首頁高頻的 balance/today 維持 user 級，不被連坐限死。
         'reports-heavy': '20/min',
+    },
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Ledger API',
+    'DESCRIPTION': '記帳 REST API：JWT 認證、帳戶／分類／標籤／交易／儲蓄目標 CRUD 與報表聚合。',
+    'VERSION': '0.9.0',  # 1.0.0 保留給對前端凍結契約的那一版
+    'SERVE_INCLUDE_SCHEMA': False,  # /api/schema/ 自身不列為 API 操作
+    'SCHEMA_PATH_PREFIX': '/api/',  # tag 分組剝掉共同前綴 → 依 auth／ledger 分組
+    'ENUM_NAME_OVERRIDES': {
+        # Account.Type 的 choices 同時出現在帳戶 CRUD 與報表信封兩處，自動命名解
+        # 不開會產生雜湊尾名（Type346Enum）——釘死名稱，下游型別產生器才有穩定 enum 名。
+        # 值必須是「模組層屬性」路徑（import_string 解不開巢狀的 Account.Type.choices）。
+        'AccountTypeEnum': 'ledger.schema.ACCOUNT_TYPE_CHOICES',
     },
 }
 

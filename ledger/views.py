@@ -12,7 +12,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from . import reports, services
+from . import reports, schema, services
 from .filters import TransactionFilter
 from .models import Account, Category, SavingsGoal, Tag, Transaction
 from .serializers import (
@@ -192,29 +192,35 @@ class ReportViewSet(viewsets.ViewSet):
             ),
         )
 
+    @schema.balance
     @action(detail=False)
     def balance(self, request):
         return Response(reports.balance_overview(request.user))
 
+    @schema.today
     @action(detail=False)
     def today(self, request):
         return Response(reports.today_summary(request.user))
 
+    @schema.summary
     @action(detail=False)
     def summary(self, request):
         year, month = self._period(request)
         return Response(reports.month_summary(request.user, year, month))
 
+    @schema.summary_by_category
     @action(detail=False, url_path='summary/by-category')
     def summary_by_category(self, request):
         year, month = self._period(request)
         return Response(reports.summary_by_category(request.user, year, month))
 
+    @schema.summary_by_tag
     @action(detail=False, url_path='summary/by-tag')
     def summary_by_tag(self, request):
         year, month = self._period(request)
         return Response(reports.summary_by_tag(request.user, year, month))
 
+    @schema.summary_range
     @action(detail=False, url_path='summary/range')
     def summary_range(self, request):
         # start/end 皆必填、鎖 YYYY-MM-DD、當前時區解讀；end 含當日（reports 端轉半開區間）。
@@ -224,10 +230,12 @@ class ReportViewSet(viewsets.ViewSet):
             raise ValidationError({'start': 'start 不可晚於 end'})
         return Response(reports.range_summary(request.user, start, end))
 
+    @schema.balance_history
     @action(detail=False, url_path='balance-history', throttle_scope='reports-heavy')
     def balance_history(self, request):
         return Response(reports.balance_history(request.user))
 
+    @schema.savings_goal_status
     @action(detail=False, url_path='savings-goal-status')
     def savings_goal_status(self, request):
         # 與 _period 不同：month 選填（省略＝年度、不套當月預設）；year 省略＝當年。
