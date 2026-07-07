@@ -24,6 +24,25 @@ def _sum_amount(txn_type):
     return Coalesce(Sum('amount', filter=Q(type=txn_type)), _ZERO, output_field=_MONEY)
 
 
+def _txns_in_range(user, start, end):
+    """[start, end) 半開區間的使用者交易 queryset；lazy——外層續接 GROUP BY 或聚合都仍是 1 查詢。
+
+    end 為排除界、呼叫端傳次一時刻表達含當日；命中 idx_txn_user_occurred。
+    """
+    return Transaction.objects.filter(user=user, occurred_at__gte=start, occurred_at__lt=end)
+
+
+def _range_net(user, start, end):
+    """區間收支聚合，回 dict{income, expense}（皆 Decimal）。
+
+    str() 由各信封出口統一處理——savings-goal 要拿原值算 difference/achieved，故核心層不轉字串。
+    """
+    return _txns_in_range(user, start, end).aggregate(
+        income=_sum_amount(Transaction.Type.INCOME),
+        expense=_sum_amount(Transaction.Type.EXPENSE),
+    )
+
+
 def balance_overview(user):
     """所有帳戶總餘額＋各帳戶餘額（首頁顯眼位置用）。1 查詢取回帳戶、Python 端加總。"""
     accounts = list(Account.objects.filter(user=user))  # 順序沿 Account.Meta.ordering
@@ -41,12 +60,7 @@ def today_summary(user):
     """今日（當前時區）收支：進頁面即時顯示今天花了多少。1 查詢，收支條件聚合。"""
     start = timezone.localtime().replace(hour=0, minute=0, second=0, microsecond=0)
     end = start + timedelta(days=1)  # 半開區間 [今日 00:00, 明日 00:00)
-    agg = Transaction.objects.filter(
-        user=user, occurred_at__gte=start, occurred_at__lt=end
-    ).aggregate(
-        expense=_sum_amount(Transaction.Type.EXPENSE),
-        income=_sum_amount(Transaction.Type.INCOME),
-    )
+    agg = _range_net(user, start, end)
     return {
         'date': start.date().isoformat(),
         'expense': str(agg['expense']),
@@ -65,15 +79,29 @@ def _month_bounds(year, month):
 def month_summary(user, year, month):
     """指定月（當前時區）的收入／支出／淨額。1 查詢：範圍過濾＋條件聚合。"""
     start, end = _month_bounds(year, month)
-    agg = Transaction.objects.filter(
-        user=user, occurred_at__gte=start, occurred_at__lt=end
-    ).aggregate(
-        income=_sum_amount(Transaction.Type.INCOME),
-        expense=_sum_amount(Transaction.Type.EXPENSE),
-    )
+    agg = _range_net(user, start, end)
     return {
         'year': year,
         'month': month,
+        'income': str(agg['income']),
+        'expense': str(agg['expense']),
+        'net': str(agg['income'] - agg['expense']),
+    }
+
+
+def range_summary(user, start_date, end_date):
+    """任意日期區間 [start_date, end_date]（含當日）的收入／支出／淨額。1 查詢。
+
+    date 轉當前時區半開區間 [start 00:00, end+1 00:00)：end 含當日故加一天當排除界，命中索引。
+    """
+    tz = timezone.get_current_timezone()
+    start = datetime(start_date.year, start_date.month, start_date.day, tzinfo=tz)
+    end_next = end_date + timedelta(days=1)  # 含當日 → 排除界＝隔日 00:00
+    end = datetime(end_next.year, end_next.month, end_next.day, tzinfo=tz)
+    agg = _range_net(user, start, end)
+    return {
+        'start': start_date.isoformat(),
+        'end': end_date.isoformat(),
         'income': str(agg['income']),
         'expense': str(agg['expense']),
         'net': str(agg['income'] - agg['expense']),
@@ -87,7 +115,7 @@ def summary_by_category(user, year, month):
     """
     start, end = _month_bounds(year, month)
     rows = (
-        Transaction.objects.filter(user=user, occurred_at__gte=start, occurred_at__lt=end)
+        _txns_in_range(user, start, end)
         .values('category', 'category__name')
         .annotate(
             income=_sum_amount(Transaction.Type.INCOME),
@@ -116,7 +144,7 @@ def summary_by_tag(user, year, month):
     """
     start, end = _month_bounds(year, month)
     rows = (
-        Transaction.objects.filter(user=user, occurred_at__gte=start, occurred_at__lt=end)
+        _txns_in_range(user, start, end)
         .filter(tags__isnull=False)
         .values('tags', 'tags__name')
         .annotate(
@@ -207,12 +235,7 @@ def savings_goal_status(user, year, month=None):
     goal = SavingsGoal.objects.filter(
         user=user, period_type=period_type, year=year, month=month
     ).first()
-    agg = Transaction.objects.filter(
-        user=user, occurred_at__gte=start, occurred_at__lt=end
-    ).aggregate(
-        income=_sum_amount(Transaction.Type.INCOME),
-        expense=_sum_amount(Transaction.Type.EXPENSE),
-    )
+    agg = _range_net(user, start, end)
     actual_net = agg['income'] - agg['expense']
 
     status = {

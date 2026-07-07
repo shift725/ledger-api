@@ -1316,7 +1316,127 @@ class TestReportSavingsGoalStatus:
             assert auth_client.get(self.URL, {'year': 2026, 'month': 7}).status_code == 200
 
 
-# --- 報表：全端點未授權掃描（7 支迴圈打 → 皆 401）---
+# --- 報表：任意日期區間收支（summary/range/，含當日、當前時區半開區間）---
+
+
+@pytest.mark.django_db
+class TestReportRangeSummary:
+    URL = '/api/ledger/reports/summary/range/'
+    TODAY = '/api/ledger/reports/today/'
+
+    def _account(self, user):
+        return Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+
+    def _txn(self, user, acc, amount, type_, occurred_at):
+        Transaction.objects.create(
+            user=user, account=acc, amount=Decimal(amount), type=type_, occurred_at=occurred_at
+        )
+
+    def test_requires_authentication(self):
+        assert APIClient().get(self.URL).status_code == 401
+
+    def test_sum_and_taipei_boundaries(self, auth_client, user):
+        # 區間 [7/1, 7/31] 台北 → 內部半開 [台北 7/1 00:00, 8/1 00:00)。一次蓋：加總正確 +
+        # start 當日界含 + end 當日深夜界含 + end+1 凌晨不含 + start 前一日不含。
+        acc = self._account(user)
+        # 含：台北 7/1 00:30（UTC 6/30 16:30）——start 當日界內
+        self._txn(
+            user, acc, '10.00', Transaction.Type.INCOME, datetime(2026, 6, 30, 16, 30, tzinfo=UTC)
+        )
+        # 含：台北 7/31 23:59（UTC 7/31 15:59）——end 當日深夜仍算進來
+        self._txn(
+            user, acc, '20.00', Transaction.Type.INCOME, datetime(2026, 7, 31, 15, 59, tzinfo=UTC)
+        )
+        # 不含：台北 8/1 00:30（UTC 7/31 16:30）——越過 end+1 排除界
+        self._txn(
+            user, acc, '999.00', Transaction.Type.INCOME, datetime(2026, 7, 31, 16, 30, tzinfo=UTC)
+        )
+        # 不含：台北 6/30 23:00（UTC 6/30 15:00）——start 前一日
+        self._txn(
+            user, acc, '888.00', Transaction.Type.EXPENSE, datetime(2026, 6, 30, 15, 0, tzinfo=UTC)
+        )
+        resp = auth_client.get(self.URL, {'start': '2026-07-01', 'end': '2026-07-31'})
+        assert resp.status_code == 200
+        assert resp.data == {
+            'start': '2026-07-01',
+            'end': '2026-07-31',
+            'income': '30.00',  # 10 + 20，兩筆界外不算
+            'expense': '0.00',
+            'net': '30.00',
+        }
+
+    def test_single_day_range_matches_today(self, auth_client, user):
+        # 不變式：start==end 單日區間，收支數字 == today/ 同日值（信封不同：start/end vs date）。
+        acc = self._account(user)
+        now_local = timezone.localtime()
+        today_0030 = now_local.replace(hour=0, minute=30, second=0, microsecond=0)
+        self._txn(user, acc, '120.00', Transaction.Type.EXPENSE, today_0030)
+        self._txn(user, acc, '500.00', Transaction.Type.INCOME, today_0030)
+        today_data = auth_client.get(self.TODAY).data
+        today = now_local.date().isoformat()
+        resp = auth_client.get(self.URL, {'start': today, 'end': today})
+        assert resp.status_code == 200
+        assert (resp.data['income'], resp.data['expense'], resp.data['net']) == (
+            today_data['income'],
+            today_data['expense'],
+            today_data['net'],
+        )
+
+    def test_empty_range_zeros(self, auth_client, user):
+        resp = auth_client.get(self.URL, {'start': '2020-01-01', 'end': '2020-01-31'})
+        assert resp.status_code == 200
+        assert resp.data == {
+            'start': '2020-01-01',
+            'end': '2020-01-31',
+            'income': '0.00',
+            'expense': '0.00',
+            'net': '0.00',
+        }
+
+    def test_isolation(self, auth_client, user, other_user):
+        other_acc = Account.objects.create(user=other_user, name='別人的', type=Account.Type.CASH)
+        self._txn(
+            other_user,
+            other_acc,
+            '999.00',
+            Transaction.Type.INCOME,
+            datetime(2026, 7, 10, 2, 0, tzinfo=UTC),
+        )
+        resp = auth_client.get(self.URL, {'start': '2026-07-01', 'end': '2026-07-31'})
+        assert resp.status_code == 200
+        assert resp.data['income'] == '0.00'  # 別人的交易不混入
+
+    def test_missing_param_returns_400(self, auth_client, user):
+        assert auth_client.get(self.URL, {'end': '2026-07-31'}).status_code == 400
+        assert auth_client.get(self.URL, {'start': '2026-07-01'}).status_code == 400
+        assert auth_client.get(self.URL).status_code == 400
+
+    def test_malformed_date_returns_400(self, auth_client, user):
+        # 鎖 %Y-%m-%d：錯分隔符 / 無分隔一律 400（fromisoformat 會誤收 '20260701'，故不用它）
+        for bad in ('2026/07/01', '20260701'):
+            resp = auth_client.get(self.URL, {'start': bad, 'end': '2026-07-31'})
+            assert resp.status_code == 400, bad
+
+    def test_start_after_end_returns_400(self, auth_client, user):
+        resp = auth_client.get(self.URL, {'start': '2026-07-31', 'end': '2026-07-01'})
+        assert resp.status_code == 400
+
+    def test_query_count_is_one(self, auth_client, user, django_assert_num_queries):
+        acc = self._account(user)
+        for _ in range(3):
+            self._txn(
+                user,
+                acc,
+                '10.00',
+                Transaction.Type.EXPENSE,
+                datetime(2026, 7, 15, 5, 0, tzinfo=UTC),
+            )
+        params = {'start': '2026-07-01', 'end': '2026-07-31'}
+        with django_assert_num_queries(1):  # 單一條件聚合，與筆數無關
+            assert auth_client.get(self.URL, params).status_code == 200
+
+
+# --- 報表：全端點未授權掃描（8 支迴圈打 → 皆 401）---
 
 
 @pytest.mark.django_db
@@ -1330,6 +1450,7 @@ def test_all_report_endpoints_require_authentication():
         '/api/ledger/reports/summary/by-tag/',
         '/api/ledger/reports/balance-history/',
         '/api/ledger/reports/savings-goal-status/',
+        '/api/ledger/reports/summary/range/',
     ]
     for path in paths:
         assert client.get(path).status_code == 401, path
