@@ -449,8 +449,8 @@ class TestTransactionFilters:
         resp = auth_client.get(self.URL, {'amount_max': '120'})
         assert self._names(resp) == {'六月午餐'}
 
-    def test_tag(self, auth_client, data):
-        resp = auth_client.get(self.URL, {'tag': str(data['travel'].id)})
+    def test_tags_any_single_value(self, auth_client, data):
+        resp = auth_client.get(self.URL, {'tags_any': str(data['travel'].id)})
         assert self._names(resp) == {'七月住宿'}
 
     def test_others_account_uuid_yields_empty_not_400(self, auth_client, other_user, data):
@@ -475,6 +475,106 @@ class TestTransactionFilters:
         assert [row['name'] for row in resp.data['results']] == ['六月午餐', '七月住宿', '薪水']
         resp = auth_client.get(self.URL, {'ordering': '-amount'})
         assert [row['name'] for row in resp.data['results']] == ['薪水', '七月住宿', '六月午餐']
+
+
+# --- Transaction 多標籤過濾：tags_any（OR）／tags_all（AND）的語意與安全邊界 ---
+
+
+@pytest.mark.django_db
+class TestTransactionTagFilters:
+    URL = '/api/ledger/transactions/'
+
+    @pytest.fixture
+    def tags(self, user):
+        # 四筆交易蓋出 OR/AND 的所有分界：[旅遊]、[旅遊+餐飲]、[餐飲]、[]；
+        # 「未使用」tag 存在但沒掛任何交易，驗 AND 混入它時整體必空。
+        acc = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+        travel = Tag.objects.create(user=user, name='旅遊')
+        food = Tag.objects.create(user=user, name='餐飲')
+        unused = Tag.objects.create(user=user, name='未使用')
+
+        def make(name, tag_list):
+            txn = Transaction.objects.create(
+                user=user,
+                account=acc,
+                amount=Decimal('100'),
+                type=Transaction.Type.EXPENSE,
+                name=name,
+            )
+            txn.tags.add(*tag_list)
+
+        make('機票', [travel])
+        make('旅館早餐', [travel, food])
+        make('午餐', [food])
+        make('雜項', [])
+        return {'travel': travel, 'food': food, 'unused': unused}
+
+    def _ids(self, *tag_objs):
+        return ','.join(str(t.id) for t in tag_objs)
+
+    def _names(self, resp):
+        assert resp.status_code == 200
+        return {row['name'] for row in resp.data['results']}
+
+    def test_any_matches_either_tag_without_duplicates(
+        self, auth_client, tags, django_assert_num_queries
+    ):
+        # OR：命中任一 tag 即列出；掛兩個命中 tag 的「旅館早餐」只能出現一次
+        # （tags__in 的 JOIN 會出多列，靠 distinct 收斂），count 同步正確。
+        # 查詢數維持 3（COUNT＋主查＋tags prefetch）——多值過濾只讓主查變複雜，不加查詢。
+        with django_assert_num_queries(3):
+            resp = auth_client.get(self.URL, {'tags_any': self._ids(tags['travel'], tags['food'])})
+        names = [row['name'] for row in resp.data['results']]
+        assert sorted(names) == ['午餐', '旅館早餐', '機票']
+        assert resp.data['count'] == 3
+
+    def test_all_requires_every_tag(self, auth_client, tags):
+        resp = auth_client.get(self.URL, {'tags_all': self._ids(tags['travel'], tags['food'])})
+        assert self._names(resp) == {'旅館早餐'}
+
+    def test_all_single_matches_superset(self, auth_client, tags):
+        # 「包含」語意：掛了指定 tag 之外還多掛別的也算命中
+        resp = auth_client.get(self.URL, {'tags_all': self._ids(tags['travel'])})
+        assert self._names(resp) == {'機票', '旅館早餐'}
+
+    def test_all_with_unmatched_tag_yields_empty(self, auth_client, tags):
+        resp = auth_client.get(self.URL, {'tags_all': self._ids(tags['travel'], tags['unused'])})
+        assert self._names(resp) == set()
+
+    def test_any_and_all_stack(self, auth_client, tags):
+        # 兩參數同給 = 條件交集（filter backend 對同一 queryset 依序疊加）
+        resp = auth_client.get(
+            self.URL,
+            {'tags_any': self._ids(tags['food']), 'tags_all': self._ids(tags['travel'])},
+        )
+        assert self._names(resp) == {'旅館早餐'}
+
+    def test_others_tag_uuid_yields_empty_not_400(self, auth_client, other_user, tags):
+        # 安全：合法但非本人的 UUID 不可變成存在性探測器——一律 200 空/不命中，
+        # 與帳戶/分類過濾的 UUIDFilter 同一原則。
+        theirs = Tag.objects.create(user=other_user, name='別人的標籤')
+        assert self._names(auth_client.get(self.URL, {'tags_any': str(theirs.id)})) == set()
+        resp = auth_client.get(self.URL, {'tags_all': self._ids(tags['travel'], theirs)})
+        assert self._names(resp) == set()
+
+    def test_malformed_uuid_in_csv_rejected(self, auth_client, tags):
+        # 逐值驗格式：清單裡混一個壞值就是 400（輸入驗證問題，照常拒絕）
+        bad = f'{tags["travel"].id},not-a-uuid'
+        assert auth_client.get(self.URL, {'tags_any': bad}).status_code == 400
+        assert auth_client.get(self.URL, {'tags_all': 'not-a-uuid'}).status_code == 400
+
+    def test_empty_param_is_ignored(self, auth_client, tags):
+        # 空字串照 django-filter 慣例忽略（不過濾）
+        resp = auth_client.get(self.URL, {'tags_any': ''})
+        assert resp.data['count'] == 4
+
+    def test_csv_empty_member_ignored(self, auth_client, tags):
+        # 連續逗號（a,,b）的空成員被靜默忽略、其餘合法值照常過濾（實測行為）——
+        # 與「空參數整體忽略」同一寬容精神，這裡把它釘成契約。
+        raw = f'{tags["travel"].id},,{tags["food"].id}'
+        resp = auth_client.get(self.URL, {'tags_any': raw})
+        assert resp.status_code == 200
+        assert resp.data['count'] == 3
 
 
 # --- Transaction 餘額維護：建/編輯/刪皆對帳（balance == Σincome − Σexpense）---
