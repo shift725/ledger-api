@@ -2,6 +2,7 @@
 
 import logging
 
+from django.core.cache import cache
 from django.db import connection
 from django.http import JsonResponse
 from django.views.decorators.http import require_GET
@@ -24,4 +25,14 @@ def healthz(request):
         # 任何 DB 層錯誤都=unhealthy（探針不准 500）；細節只進 log，回應不洩內部資訊
         logger.warning('healthz DB check failed', exc_info=True)
         return JsonResponse({'status': 'unhealthy', 'checks': {'db': 'error'}}, status=503)
-    return JsonResponse({'status': 'ok', 'checks': {'db': 'ok'}})
+    try:
+        # cache backend 連通性：Redis 斷線時 throttle 的 cache 操作會拋錯 → 全 API 500，
+        # readiness 必須如實反映。get 一發即足以探連通（不寫入、不污染）；backend 無關，
+        # LocMemCache（CI／本機）恆綠。
+        cache.get('healthz')
+    except Exception:
+        logger.warning('healthz cache check failed', exc_info=True)
+        return JsonResponse(
+            {'status': 'unhealthy', 'checks': {'db': 'ok', 'cache': 'error'}}, status=503
+        )
+    return JsonResponse({'status': 'ok', 'checks': {'db': 'ok', 'cache': 'ok'}})

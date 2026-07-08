@@ -8,6 +8,7 @@ current timezone（settings.TIME_ZONE）、不寫死時區字串。
 from datetime import datetime, timedelta
 from decimal import Decimal
 
+from django.core.cache import cache
 from django.db.models import DecimalField, Q, Sum, Value
 from django.db.models.functions import Coalesce, TruncMonth
 from django.utils import timezone
@@ -215,6 +216,28 @@ def balance_history(user):
             months.append({'month': f'{y:04d}-{m:02d}', 'balance': str(running)})
         result.append({'account_id': str(acc.id), 'account_name': acc.name, 'months': months})
     return result
+
+
+# balance-history 是唯一全歷史、讀取量隨終身交易數成長的報表（已掛 reports-heavy 桶）→
+# 只對它做 cache-aside。TTL 兜底不經交易的顯示變動（如帳戶改名）；交易建/改/刪走顯式失效。
+_BALANCE_HISTORY_TTL = 300  # 秒
+
+
+def _balance_history_key(user_id):
+    return f'reports:balance-history:{user_id}'
+
+
+def balance_history_cached(user):
+    """balance_history 的 cache-aside 包裝：命中回快取、未命中算完存 TTL。"""
+    return cache.get_or_set(
+        _balance_history_key(user.id), lambda: balance_history(user), _BALANCE_HISTORY_TTL
+    )
+
+
+def invalidate_balance_history(user_id):
+    """失效某 user 的 balance-history 快取。由交易寫入的 on_commit 呼叫（TransactionViewSet），
+    只在 DB commit 後才清——避免並發讀者拿未提交的舊資料回填、髒值撐滿整個 TTL。"""
+    cache.delete(_balance_history_key(user_id))
 
 
 def savings_goal_status(user, year, month=None):

@@ -14,14 +14,30 @@ services:
       retries: 10
     restart: unless-stopped
 
+  redis:
+    image: redis:8-alpine
+    # 不對外開 port（只服務容器網路內的 web/worker）、不掛 volume（快取資料可拋；
+    # P4.3 若要 broker 持久化再議）。ping 回 PONG 即 exit 0。
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
   web:
     build: .
     env_file: .env
     environment:
       # 由 compose 從 POSTGRES_* / DB_* 變數組合，避免使用者手動維護兩處
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${DB_HOST}:${DB_PORT}/${POSTGRES_DB}
+      # 服務名固定、無機密 → 直接在 compose 組裝（同 DATABASE_URL 作法）；.env 不必維護。
+      # 兼作 cache backend 與（P4.3 起）Celery broker；DB 0 給 cache。
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     ports:
       - "${WEB_PORT:-8000}:8000"

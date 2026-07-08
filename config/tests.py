@@ -48,10 +48,10 @@ class JsonFormatterTests(SimpleTestCase):
 class HealthzTests(TestCase):
     """healthz 是刻意公開的探針（無業務資料、無副作用）——測試全程匿名打。"""
 
-    def test_ok_when_db_reachable(self):
+    def test_ok_when_db_and_cache_reachable(self):
         res = Client().get('/healthz')
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.json(), {'status': 'ok', 'checks': {'db': 'ok'}})
+        self.assertEqual(res.json(), {'status': 'ok', 'checks': {'db': 'ok', 'cache': 'ok'}})
 
     def test_db_failure_returns_503_and_logs_without_leaking_details(self):
         with mock.patch('config.views.connection') as conn:
@@ -62,6 +62,18 @@ class HealthzTests(TestCase):
         self.assertEqual(res.json(), {'status': 'unhealthy', 'checks': {'db': 'error'}})
         # 錯誤細節只進 log，不進回應
         self.assertNotIn('10.0.0.5', res.content.decode())
+
+    def test_cache_failure_returns_503_and_logs(self):
+        # Redis 斷線＝cache 操作拋錯；db 正常故先過（→ db:ok），cache check 才是不健康點。
+        with mock.patch('config.views.cache') as c:
+            c.get.side_effect = Exception('connection refused at 10.0.0.9')
+            with self.assertLogs('config.views', level='WARNING'):
+                res = Client().get('/healthz')
+        self.assertEqual(res.status_code, 503)
+        self.assertEqual(
+            res.json(), {'status': 'unhealthy', 'checks': {'db': 'ok', 'cache': 'error'}}
+        )
+        self.assertNotIn('10.0.0.9', res.content.decode())
 
     def test_non_get_rejected(self):
         self.assertEqual(Client().post('/healthz').status_code, 405)

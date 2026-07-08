@@ -1294,6 +1294,102 @@ class TestReportBalanceHistory:
             assert auth_client.get(self.URL).status_code == 200
 
 
+# --- 報表：balance-history 快取（cache-aside + 交易寫入後 on_commit 失效）---
+
+
+@pytest.mark.django_db
+class TestBalanceHistoryCache:
+    URL = '/api/ledger/reports/balance-history/'
+    TXN = '/api/ledger/transactions/'
+
+    def _post_income(self, client, acc, amount, capture):
+        # 走 API 建交易 → 觸發 perform_create 的 on_commit 失效；capture 讓 callback 在
+        # 測試交易（會 rollback、on_commit 平時不觸發）內實際執行。
+        with capture(execute=True):
+            resp = client.post(
+                self.TXN,
+                {
+                    'account': str(acc.id),
+                    'amount': amount,
+                    'type': 'income',
+                    'occurred_at': '2026-05-10T02:00:00Z',
+                },
+                format='json',
+            )
+        assert resp.status_code == 201
+        return resp
+
+    def test_warm_read_served_from_cache_without_queries(
+        self, auth_client, user, django_assert_num_queries
+    ):
+        acc = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+        Transaction.objects.create(
+            user=user,
+            account=acc,
+            amount=Decimal('100.00'),
+            type=Transaction.Type.INCOME,
+            occurred_at=datetime(2026, 5, 10, 2, 0, tzinfo=UTC),
+        )
+        with django_assert_num_queries(2):  # 冷讀：帳戶清單 + 每月淨變化聚合
+            cold = auth_client.get(self.URL)
+        with django_assert_num_queries(0):  # 暖讀：整份回應來自快取，零 DB 查詢
+            warm = auth_client.get(self.URL)
+        assert warm.status_code == 200
+        assert warm.data == cold.data
+
+    def test_warm_cache_is_isolated_per_user(self, auth_client, user, other_user):
+        # user 先暖好自己的快取；other_user 的讀取不得拿到 user 的資料（key 帶 user pk）。
+        Account.objects.create(user=user, name='我的', type=Account.Type.CASH)
+        auth_client.get(self.URL)
+        Account.objects.create(user=other_user, name='別人的', type=Account.Type.CASH)
+        other_client = APIClient()
+        other_client.force_authenticate(user=other_user)
+        resp = other_client.get(self.URL)
+        names = {e['account_name'] for e in resp.data}
+        assert '別人的' in names
+        assert '我的' not in names  # key 若非 per-user，這裡會漏出 user 的暖快取
+
+    def test_create_transaction_invalidates_cache(
+        self, auth_client, user, django_capture_on_commit_callbacks, django_assert_num_queries
+    ):
+        acc = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+        warm = auth_client.get(self.URL)  # 暖快取：此帳戶尚無交易 → months 空
+        assert next(e for e in warm.data if e['account_id'] == str(acc.id))['months'] == []
+        self._post_income(auth_client, acc, '100.00', django_capture_on_commit_callbacks)
+        with django_assert_num_queries(2):  # 失效後重新冷讀（非回舊快取）
+            after = auth_client.get(self.URL)
+        entry = next(e for e in after.data if e['account_id'] == str(acc.id))
+        assert entry['months'][-1]['balance'] == '100.00'  # 新交易已反映
+
+    def test_update_transaction_invalidates_cache(
+        self, auth_client, user, django_capture_on_commit_callbacks
+    ):
+        acc = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+        resp = self._post_income(auth_client, acc, '100.00', django_capture_on_commit_callbacks)
+        txn_id = resp.data['id']
+        auth_client.get(self.URL)  # 暖快取：末月餘額 100
+        with django_capture_on_commit_callbacks(execute=True):
+            upd = auth_client.patch(f'{self.TXN}{txn_id}/', {'amount': '250.00'}, format='json')
+        assert upd.status_code == 200
+        after = auth_client.get(self.URL)
+        entry = next(e for e in after.data if e['account_id'] == str(acc.id))
+        assert entry['months'][-1]['balance'] == '250.00'  # 改額已反映（非舊快取 100）
+
+    def test_delete_transaction_invalidates_cache(
+        self, auth_client, user, django_capture_on_commit_callbacks
+    ):
+        acc = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+        resp = self._post_income(auth_client, acc, '100.00', django_capture_on_commit_callbacks)
+        txn_id = resp.data['id']
+        auth_client.get(self.URL)  # 暖快取：末月餘額 100
+        with django_capture_on_commit_callbacks(execute=True):
+            dele = auth_client.delete(f'{self.TXN}{txn_id}/')
+        assert dele.status_code == 204
+        after = auth_client.get(self.URL)
+        entry = next(e for e in after.data if e['account_id'] == str(acc.id))
+        assert entry['months'] == []  # 交易刪光 → 空 months（非舊快取）
+
+
 # --- 報表：儲蓄目標達成狀態（savings-goal-status/，月度／年度雙態）---
 
 

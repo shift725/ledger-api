@@ -11,5 +11,6 @@ uuid_utils==0.14.1
 gunicorn==23.0.0
 whitenoise==6.8.2
 psycopg[binary]==3.2.3
+redis==8.0.1
 python-decouple==3.8
 dj-database-url==2.3.0
