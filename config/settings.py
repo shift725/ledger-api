@@ -58,6 +58,18 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 DATABASES = {'default': dj_database_url.parse(config('DATABASE_URL'), conn_max_age=600)}
 
+# throttle 計數與業務快取共用 default cache。設 REDIS_URL（容器由 compose 注入）→ 走 Redis、
+# 計數跨 gunicorn worker 一致；未設（CI／本機 venv 測試）→ 不定義 CACHES，落 Django 預設
+# LocMemCache：測邏輯不測基建，CI 不必起 Redis service。redis-py 由 RedisCache backend 驅動。
+REDIS_URL = config('REDIS_URL', default=None)
+if REDIS_URL:  # pragma: no cover — 環境閘設定；Redis 路徑走容器 smoke 驗，不進 LocMem 單元測試
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': REDIS_URL,
+        }
+    }
+
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
     {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator'},
@@ -86,9 +98,11 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': ('rest_framework.permissions.AllowAny',),
     # OpenAPI 3 schema 由 drf-spectacular 從 view/serializer 推導（code-first，文件不另外手維護）。
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
-    # 匿名依 IP、登入依 user pk 兩級限流；計數走 Django cache（預設 LocMemCache）。
-    # 天花板一：LocMemCache 為 per-process → 多 worker 下實際上限 ≈ rate × worker 數、
-    #   重啟歸零；換共享 cache backend（Redis）計數即跨行程一致。
+    # 匿名依 IP、登入依 user pk 兩級限流；計數走 default cache（見上 CACHES 區塊）。
+    # 設 REDIS_URL 後計數存 Redis、跨 gunicorn worker 一致：原本 LocMemCache 的 per-process
+    #   限制（實際上限 ≈ rate × worker 數、重啟歸零）已解。代價：Redis 斷線時 cache.get 拋錯
+    #   → 請求 500（限流形同 fail-closed、非靜默放行）；healthz 的 cache check 讓 readiness
+    #   如實回 503，交編排系統摘流量。
     # 天花板二：匿名以 IP 識別、DRF 預設信任 X-Forwarded-For → 無代理正規化（NUM_PROXIES）
     #   時可偽造 header 繞過；此限流為縱深防禦，非安全邊界。
     'DEFAULT_THROTTLE_CLASSES': (

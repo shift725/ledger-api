@@ -105,6 +105,7 @@ class TransactionViewSet(OwnedModelViewSet):
             services.apply_to_balance(txn.account_id, txn.type, txn.amount)
             # carry-forward 只在建立時觸發（編輯/刪除不碰）；與建交易同一 atomic，一起成敗。
             services.carry_forward_savings_goal(self.request.user)
+            self._invalidate_balance_history_on_commit()
 
     def perform_update(self, serializer):
         # 編輯 = 還原舊影響 + 套用新影響（帳戶可被改掉，故 reverse 打舊帳戶、apply 打新帳戶）。
@@ -126,11 +127,19 @@ class TransactionViewSet(OwnedModelViewSet):
             txn = serializer.save()
             services.reverse_from_balance(old_account_id, old_type, old_amount)
             services.apply_to_balance(txn.account_id, txn.type, txn.amount)
+            self._invalidate_balance_history_on_commit()
 
     def perform_destroy(self, instance):
         with transaction.atomic():
             services.reverse_from_balance(instance.account_id, instance.type, instance.amount)
             instance.delete()
+            self._invalidate_balance_history_on_commit()
+
+    def _invalidate_balance_history_on_commit(self):
+        # 交易改動了餘額 → 失效該 user 的 balance-history 快取。掛 on_commit：只在本次
+        # atomic 真正 commit 後才清，rollback 時不誤清；user pk 綁進閉包，不留 self 參照。
+        user_id = self.request.user.id
+        transaction.on_commit(lambda: reports.invalidate_balance_history(user_id))
 
 
 class SavingsGoalViewSet(OwnedModelViewSet):
@@ -233,7 +242,7 @@ class ReportViewSet(viewsets.ViewSet):
     @schema.balance_history
     @action(detail=False, url_path='balance-history', throttle_scope='reports-heavy')
     def balance_history(self, request):
-        return Response(reports.balance_history(request.user))
+        return Response(reports.balance_history_cached(request.user))
 
     @schema.savings_goal_status
     @action(detail=False, url_path='savings-goal-status')
