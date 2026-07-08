@@ -25,6 +25,15 @@ services:
         condition: service_healthy
     ports:
       - "${WEB_PORT:-8000}:8000"
+    healthcheck:
+      # runtime image 無 curl/wget → 用 python urllib 打探針；
+      # urlopen 對非 2xx 拋例外 → exit code 非 0 = unhealthy
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # 蓋過 entrypoint 的 wait-for-db → migrate → collectstatic 暖機時間
+      start_period: 40s
     restart: unless-stopped
 
   # ------------------------------------------------------------

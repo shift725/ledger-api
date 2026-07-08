@@ -120,6 +120,27 @@ SPECTACULAR_SETTINGS = {
     },
 }
 
+# 12-factor：log 一律進 stdout 由容器平台收（docker logs 直接可讀）。
+# Django 預設 LOGGING 的 console handler 掛 require_debug_true，DEBUG=False 的
+# 生產容器裡 app log 無處去——故自訂。JSON lines 格式（config/logging.py）：
+# 機器可解析、為聚合系統鋪路；gunicorn 自身的 access/error log 不歸本設定管。
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'json': {'()': 'config.logging.JsonFormatter'},
+    },
+    'handlers': {
+        'console': {'class': 'logging.StreamHandler', 'formatter': 'json'},
+    },
+    'root': {'handlers': ['console'], 'level': 'INFO'},
+    'loggers': {
+        # 背景任務沒有 request/response 可看，log 是唯一觀測窗——顯式保 INFO，
+        # 不受日後 root 調級影響。
+        'ledger': {'level': 'INFO'},
+    },
+}
+
 # 其餘採 simplejwt 預設（HS256、SIGNING_KEY=SECRET_KEY、Bearer、id/user_id）。
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
