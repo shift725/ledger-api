@@ -80,17 +80,20 @@ class HealthzTests(TestCase):
 
 
 class CelerySmokeTests(SimpleTestCase):
-    """Celery 基建煙霧：任務就地可執行、log 走 JSON handler、Django settings 橋到 celery conf。"""
+    """Celery 基建煙霧：排程指到的任務真的存在、Django settings 橋到 celery conf。"""
 
-    def test_heartbeat_runs_locally_and_logs(self):
-        # .apply()（非 .delay()）強制本地同步執行：容器測試環境有真 broker，.delay() 會投給
-        # live worker、本地 assertLogs 收不到；.apply() 兩環境皆確定就地跑。
-        from config.celery import heartbeat
+    def test_daily_task_name_matches_schedule(self):
+        # beat 只認任務名字串：打錯或改名不會報錯，只會每天安靜地什麼都不做。拿任務物件的
+        # name 比對排程，重構改名時這裡會紅。
+        # 不查 celery_app.tasks 註冊表：autodiscover 是延遲的（只在 worker 啟動時 import
+        # 各 app 的 tasks 模組），web／test 行程裡那張表只有 celery 內建任務。
+        from django.conf import settings
 
-        with self.assertLogs('config.celery', level='INFO') as cm:
-            result = heartbeat.apply()
-        self.assertTrue(result.successful())
-        self.assertIn('heartbeat', '\n'.join(cm.output).lower())
+        from ledger.tasks import post_due_recurring_rules
+
+        entry = settings.CELERY_BEAT_SCHEDULE['post-due-recurring-rules']
+        self.assertEqual(entry['task'], post_due_recurring_rules.name)
+        self.assertEqual((entry['schedule'].hour, entry['schedule'].minute), ({0}, {5}))
 
     def test_django_settings_bridged_to_celery_conf(self):
         # namespace='CELERY' 把 CELERY_ 前綴的 Django 設定讀進 celery conf。用環境無關的兩項驗橋接：

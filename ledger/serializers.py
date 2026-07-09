@@ -1,6 +1,7 @@
+from django.utils import timezone
 from rest_framework import serializers
 
-from .models import Account, Category, SavingsGoal, Tag, Transaction
+from .models import Account, Category, RecurringRule, SavingsGoal, Tag, Transaction, next_due
 
 
 class AccountSerializer(serializers.ModelSerializer):
@@ -45,11 +46,13 @@ class TransactionSerializer(serializers.ModelSerializer):
             'description',
             'occurred_at',
             'tags',
+            'source_rule',
             'account_name',
             'category_name',
             'tag_names',
         ]
-        read_only_fields = ['id']
+        # source_rule 唯讀：由自動記帳流程回填，client 不得宣稱某筆交易來自某規則。
+        read_only_fields = ['id', 'source_rule']
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -65,6 +68,55 @@ class TransactionSerializer(serializers.ModelSerializer):
             self.fields['account'].queryset = Account.objects.filter(user=user)
             self.fields['category'].queryset = Category.objects.filter(user=user)
             self.fields['tags'].child_relation.queryset = Tag.objects.filter(user=user)
+
+
+class RecurringRuleSerializer(serializers.ModelSerializer):
+    account_name = serializers.CharField(source='account.name', read_only=True)
+    category_name = serializers.CharField(source='category.name', read_only=True, allow_null=True)
+
+    class Meta:
+        model = RecurringRule
+        fields = [
+            'id',
+            'account',
+            'category',
+            'amount',
+            'type',
+            'name',
+            'description',
+            'day_of_month',
+            'is_active',
+            'next_run_date',
+            'account_name',
+            'category_name',
+        ]
+        # next_run_date 唯讀：它是系統推進的游標，client 能改就能讓規則補跑或跳期。
+        read_only_fields = ['id', 'next_run_date']
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # 與 TransactionSerializer 同一道第二層隔離：關聯欄位的可選 queryset 收斂到本人。
+        # 條件用 is_authenticated 而非 is not None——OpenAPI 產生器的假 request 帶 AnonymousUser。
+        request = self.context.get('request')
+        if request is not None and request.user.is_authenticated:
+            user = request.user
+            self.fields['account'].queryset = Account.objects.filter(user=user)
+            self.fields['category'].queryset = Category.objects.filter(user=user)
+
+    def create(self, validated_data):
+        validated_data['next_run_date'] = next_due(
+            validated_data['day_of_month'], timezone.localdate()
+        )
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        # 改扣款日 → 重算；停用後重新啟用 → 從今天重算（停用期間不補帳：暫停是使用者的
+        # 意思表示，不是服務停機）。只改金額/帳戶等不動游標，免得編輯一次就跳過一期。
+        day = validated_data.get('day_of_month', instance.day_of_month)
+        reactivated = validated_data.get('is_active') and not instance.is_active
+        if day != instance.day_of_month or reactivated:
+            validated_data['next_run_date'] = next_due(day, timezone.localdate())
+        return super().update(instance, validated_data)
 
 
 class SavingsGoalSerializer(serializers.ModelSerializer):

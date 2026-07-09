@@ -13,13 +13,15 @@ from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema, inline_serializer
 from rest_framework import serializers
 
-from .models import Account, SavingsGoal
+from .models import Account, SavingsGoal, Transaction
 
 # Account.Type 的 choices 出現在帳戶 CRUD 與報表信封兩個 component，enum 自動命名
 # 會撞名並退化成雜湊尾名；settings 的 ENUM_NAME_OVERRIDES 釘名時需要一個
 # 「模組層屬性」的 import 路徑（import_string 解不開 Account.Type.choices 這種巢狀路徑），
 # 所以在這裡放一個常數給它指。
 ACCOUNT_TYPE_CHOICES = Account.Type.choices
+# income/expense 這組同理：欄位同樣叫 type，且交易與定期定額規則兩個 component 共用它。
+TRANSACTION_TYPE_CHOICES = Transaction.Type.choices
 
 
 def _money(**kwargs):

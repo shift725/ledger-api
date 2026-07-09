@@ -1,7 +1,20 @@
 import pytest
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from rest_framework.test import APIClient
+
+
+@pytest.fixture(autouse=True, scope='session')
+def _fast_password_hashing():
+    """測試環境改用最快的雜湊器。
+
+    PBKDF2 的 120 萬輪是給正式環境擋離線暴力破解用的，本機一次要 0.84 秒；每個測試
+    都建使用者，光雜湊就吃掉整輪八成時間。測試只驗「對的密碼能過、錯的不能過」，
+    這個性質任何雜湊器都成立。本檔是 dev-only（runtime image 無 pytest），
+    正式環境的 PASSWORD_HASHERS 不受影響。
+    """
+    settings.PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']
 
 
 @pytest.fixture(autouse=True)
