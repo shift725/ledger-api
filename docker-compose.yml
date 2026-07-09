@@ -1,3 +1,13 @@
+# web／worker／beat 三個進程連同一組後端，值必須一致 → 頂層定義一次、各 service 引用，
+# 改一處三處同步（防漏改漂移）。x- 前綴是 compose extension field，不會被當成 service。
+x-app-env: &app-env
+  # 由 compose 從 POSTGRES_* / DB_* 變數組合，避免使用者手動維護兩處
+  DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${DB_HOST}:${DB_PORT}/${POSTGRES_DB}
+  # 服務名固定、無機密 → 直接在 compose 組裝（同 DATABASE_URL 作法）；.env 不必維護。
+  # REDIS_URL（db 0）給 cache／throttle；CELERY_BROKER_URL（db 1）給任務佇列，兩者隔離。
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/1
+
 services:
   db:
     image: postgres:16-alpine
@@ -16,8 +26,8 @@ services:
 
   redis:
     image: redis:8-alpine
-    # 不對外開 port（只服務容器網路內的 web/worker）、不掛 volume（快取資料可拋；
-    # P4.3 若要 broker 持久化再議）。ping 回 PONG 即 exit 0。
+    # 不對外開 port（只服務容器網路內的 web/worker）、不掛 volume（快取資料可拋、
+    # 當 broker 的任務佇列亦可重建；要持久化再掛 volume）。ping 回 PONG 即 exit 0。
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -28,12 +38,7 @@ services:
   web:
     build: .
     env_file: .env
-    environment:
-      # 由 compose 從 POSTGRES_* / DB_* 變數組合，避免使用者手動維護兩處
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${DB_HOST}:${DB_PORT}/${POSTGRES_DB}
-      # 服務名固定、無機密 → 直接在 compose 組裝（同 DATABASE_URL 作法）；.env 不必維護。
-      # 兼作 cache backend 與（P4.3 起）Celery broker；DB 0 給 cache。
-      REDIS_URL: redis://redis:6379/0
+    environment: *app-env
     depends_on:
       db:
         condition: service_healthy
@@ -50,6 +55,31 @@ services:
       retries: 3
       # 蓋過 entrypoint 的 wait-for-db → migrate → collectstatic 暖機時間
       start_period: 40s
+    restart: unless-stopped
+
+  # worker：執行任務；beat：排程器，到點把任務投進 broker（Redis db 1）。
+  # 兩者同 image、只換 command；depends_on web healthy → web entrypoint 先 migrate 完，
+  # worker/beat 再過同一 entrypoint 時 migrate/collectstatic 皆 no-op（不與 web 競爭）。
+  worker:
+    build: .
+    env_file: .env
+    environment: *app-env
+    command: celery -A config worker -l info
+    depends_on: &celery-deps
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+
+  beat:
+    build: .
+    env_file: .env
+    environment: *app-env
+    command: celery -A config beat -l info
+    depends_on: *celery-deps
     restart: unless-stopped
 
   # ------------------------------------------------------------

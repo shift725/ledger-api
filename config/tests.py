@@ -77,3 +77,25 @@ class HealthzTests(TestCase):
 
     def test_non_get_rejected(self):
         self.assertEqual(Client().post('/healthz').status_code, 405)
+
+
+class CelerySmokeTests(SimpleTestCase):
+    """Celery 基建煙霧：任務就地可執行、log 走 JSON handler、Django settings 橋到 celery conf。"""
+
+    def test_heartbeat_runs_locally_and_logs(self):
+        # .apply()（非 .delay()）強制本地同步執行：容器測試環境有真 broker，.delay() 會投給
+        # live worker、本地 assertLogs 收不到；.apply() 兩環境皆確定就地跑。
+        from config.celery import heartbeat
+
+        with self.assertLogs('config.celery', level='INFO') as cm:
+            result = heartbeat.apply()
+        self.assertTrue(result.successful())
+        self.assertIn('heartbeat', '\n'.join(cm.output).lower())
+
+    def test_django_settings_bridged_to_celery_conf(self):
+        # namespace='CELERY' 把 CELERY_ 前綴的 Django 設定讀進 celery conf。用環境無關的兩項驗橋接：
+        # task_always_eager 隨有無 broker 變（容器測試吃生產 broker→非 eager），不可當普適斷言。
+        from config import celery_app
+
+        self.assertEqual(celery_app.conf.timezone, 'Asia/Taipei')
+        self.assertFalse(celery_app.conf.worker_hijack_root_logger)
