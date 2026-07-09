@@ -5,8 +5,9 @@
 """
 
 import io
+import logging
 import threading
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from unittest import mock
 
@@ -20,6 +21,7 @@ except ImportError as exc:
     import unittest
 
     raise unittest.SkipTest('ledger 測試為 pytest 專屬，容器 Django runner 略過') from exc
+from django.core.cache import cache
 from django.core.management import call_command
 from django.db import IntegrityError, connection, transaction
 from django.test.utils import CaptureQueriesContext
@@ -27,9 +29,18 @@ from django.utils import timezone
 from drf_spectacular.generators import SchemaGenerator
 from rest_framework.test import APIClient
 
-from ledger import services
-from ledger.models import Account, Category, SavingsGoal, Tag, Transaction
+from ledger import reports, services
+from ledger.models import (
+    Account,
+    Category,
+    RecurringRule,
+    SavingsGoal,
+    Tag,
+    Transaction,
+    next_due,
+)
 from ledger.serializers import TransactionSerializer
+from ledger.tasks import post_due_recurring_rules
 
 
 @pytest.mark.django_db
@@ -137,6 +148,108 @@ def test_str_representations(user):
     assert str(tag) == '日本旅遊'
     assert '午餐' in str(txn)
     assert '2026' in str(goal)
+
+
+# --- 定期定額：日期算術（純函式，不碰 DB）與 DB 約束 ---
+
+
+@pytest.mark.parametrize(
+    'day_of_month,on_or_after,expected',
+    [
+        # 今天就是到期日 → 回今天（規則建立當天到期，由隔日任務 catch-up 補建）
+        (9, date(2026, 7, 9), date(2026, 7, 9)),
+        # 本月的日子已過 → 跳下個月
+        (5, date(2026, 7, 9), date(2026, 8, 5)),
+        # 短月 clamp：31 號在 2 月落在月底；閏年是 29
+        (31, date(2026, 2, 1), date(2026, 2, 28)),
+        (31, date(2024, 2, 1), date(2024, 2, 29)),
+        # clamp 不造成漂移：2 月落在 28 號，3 月仍回到 31 號
+        (31, date(2026, 3, 1), date(2026, 3, 31)),
+        # 跨年
+        (1, date(2026, 12, 2), date(2027, 1, 1)),
+    ],
+)
+def test_next_due(day_of_month, on_or_after, expected):
+    assert next_due(day_of_month, on_or_after) == expected
+
+
+@pytest.mark.django_db
+def test_recurring_rule_str(user):
+    account = Account.objects.create(user=user, name='銀行', type=Account.Type.BANK)
+    rule = RecurringRule.objects.create(
+        user=user,
+        account=account,
+        amount=Decimal('18000.00'),
+        type=Transaction.Type.EXPENSE,
+        name='房租',
+        day_of_month=5,
+        next_run_date=date(2026, 8, 5),
+    )
+    assert '房租' in str(rule)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize('day_of_month', [0, 32])
+def test_recurring_rule_day_of_month_constraint(user, day_of_month):
+    # 繞過 serializer 直接寫 DB → CheckConstraint 是最後防線
+    account = Account.objects.create(user=user, name='銀行', type=Account.Type.BANK)
+    with pytest.raises(IntegrityError), transaction.atomic():
+        RecurringRule.objects.create(
+            user=user,
+            account=account,
+            amount=Decimal('100.00'),
+            type=Transaction.Type.EXPENSE,
+            day_of_month=day_of_month,
+            next_run_date=date(2026, 8, 1),
+        )
+
+
+@pytest.mark.django_db
+def test_transaction_unique_per_rule_occurrence(user):
+    # 冪等的真正機制：同一規則的同一到期日只能有一筆交易，資料庫層擋下重複記帳
+    account = Account.objects.create(user=user, name='銀行', type=Account.Type.BANK)
+    rule = RecurringRule.objects.create(
+        user=user,
+        account=account,
+        amount=Decimal('18000.00'),
+        type=Transaction.Type.EXPENSE,
+        day_of_month=5,
+        next_run_date=date(2026, 8, 5),
+    )
+    due = datetime(2026, 8, 5, tzinfo=UTC)
+    Transaction.objects.create(
+        user=user,
+        account=account,
+        amount=Decimal('18000.00'),
+        type=Transaction.Type.EXPENSE,
+        occurred_at=due,
+        source_rule=rule,
+    )
+    with pytest.raises(IntegrityError), transaction.atomic():
+        Transaction.objects.create(
+            user=user,
+            account=account,
+            amount=Decimal('18000.00'),
+            type=Transaction.Type.EXPENSE,
+            occurred_at=due,
+            source_rule=rule,
+        )
+
+
+@pytest.mark.django_db
+def test_manual_transactions_may_share_occurred_at(user):
+    # source_rule=NULL：PostgreSQL 預設 NULL 互不相等，故上面那條唯一約束不誤傷手動交易
+    account = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+    due = datetime(2026, 8, 5, tzinfo=UTC)
+    for _ in range(2):
+        Transaction.objects.create(
+            user=user,
+            account=account,
+            amount=Decimal('50.00'),
+            type=Transaction.Type.EXPENSE,
+            occurred_at=due,
+        )
+    assert Transaction.objects.filter(source_rule__isnull=True).count() == 2
 
 
 # --- CRUD API：Category / Tag 兩個同形資源參數化，驗 OwnedModelViewSet 的隔離契約 ---
@@ -810,6 +923,323 @@ class TestSavingsGoalViewSet:
         assert auth_client.get(detail).status_code == 404
         assert auth_client.patch(detail, {'amount': '1.00'}, format='json').status_code == 404
         assert auth_client.delete(detail).status_code == 404
+
+
+# --- RecurringRule：CRUD、兩層隔離、next_run_date 推算與重算語意 ---
+
+
+@pytest.mark.django_db
+class TestRecurringRuleViewSet:
+    URL = '/api/ledger/recurring-rules/'
+
+    def _account(self, owner, name='銀行'):
+        return Account.objects.create(user=owner, name=name, type=Account.Type.BANK)
+
+    def _rule(self, owner, account=None, **kwargs):
+        kwargs.setdefault('amount', Decimal('18000.00'))
+        kwargs.setdefault('type', Transaction.Type.EXPENSE)
+        kwargs.setdefault('day_of_month', 5)
+        kwargs.setdefault('next_run_date', next_due(kwargs['day_of_month'], timezone.localdate()))
+        return RecurringRule.objects.create(
+            user=owner, account=account or self._account(owner), **kwargs
+        )
+
+    def test_requires_authentication(self):
+        assert APIClient().get(self.URL).status_code == 401
+
+    def test_create_forces_owner_and_computes_next_run_date(self, auth_client, user, other_user):
+        acc = self._account(user)
+        resp = auth_client.post(
+            self.URL,
+            {
+                'account': str(acc.id),
+                'amount': '18000.00',
+                'type': 'expense',
+                'name': '房租',
+                'day_of_month': 5,
+                'user': str(other_user.id),  # 應被忽略
+                'next_run_date': '2000-01-01',  # 唯讀，應被忽略（游標由系統推算）
+            },
+            format='json',
+        )
+        assert resp.status_code == 201
+        rule = RecurringRule.objects.get(id=resp.data['id'])
+        assert rule.user == user
+        assert rule.next_run_date == next_due(5, timezone.localdate())
+
+    def test_list_returns_only_own(self, auth_client, user, other_user):
+        self._rule(user, name='我的')
+        self._rule(other_user, name='別人的')
+        resp = auth_client.get(self.URL)
+        assert resp.status_code == 200
+        assert [row['name'] for row in resp.data['results']] == ['我的']
+
+    def test_cannot_reach_others_rule(self, auth_client, other_user):
+        theirs = self._rule(other_user)
+        detail = f'{self.URL}{theirs.id}/'
+        assert auth_client.get(detail).status_code == 404
+        assert auth_client.patch(detail, {'amount': '1.00'}).status_code == 404
+        assert auth_client.delete(detail).status_code == 404
+
+    @pytest.mark.parametrize('day', [0, 32])
+    def test_day_of_month_out_of_range_returns_400(self, auth_client, user, day):
+        acc = self._account(user)
+        resp = auth_client.post(
+            self.URL,
+            {'account': str(acc.id), 'amount': '100.00', 'type': 'expense', 'day_of_month': day},
+            format='json',
+        )
+        assert resp.status_code == 400
+
+    def test_rejects_others_account(self, auth_client, other_user):
+        # 第二層隔離：serializer 把 account queryset 收斂到本人 → 別人的 id 是 400 不是 500
+        theirs = self._account(other_user, name='別人的')
+        resp = auth_client.post(
+            self.URL,
+            {'account': str(theirs.id), 'amount': '100.00', 'type': 'expense', 'day_of_month': 5},
+            format='json',
+        )
+        assert resp.status_code == 400
+
+    def test_rejects_others_category(self, auth_client, user, other_user):
+        acc = self._account(user)
+        theirs_cat = Category.objects.create(user=other_user, name='別人的分類')
+        resp = auth_client.post(
+            self.URL,
+            {
+                'account': str(acc.id),
+                'category': str(theirs_cat.id),
+                'amount': '100.00',
+                'type': 'expense',
+                'day_of_month': 5,
+            },
+            format='json',
+        )
+        assert resp.status_code == 400
+
+    def test_delete_account_with_rule_returns_409(self, auth_client, user):
+        # RecurringRule.account 也是 PROTECT：訊息要涵蓋規則，不能只說「尚有交易」
+        acc = self._account(user)
+        self._rule(user, account=acc)
+        resp = auth_client.delete(f'/api/ledger/accounts/{acc.id}/')
+        assert resp.status_code == 409
+        assert Account.objects.filter(id=acc.id).exists()
+
+    def test_changing_day_of_month_recomputes_next_run_date(self, auth_client, user):
+        rule = self._rule(user, day_of_month=5)
+        resp = auth_client.patch(f'{self.URL}{rule.id}/', {'day_of_month': 20}, format='json')
+        assert resp.status_code == 200
+        rule.refresh_from_db()
+        assert rule.next_run_date == next_due(20, timezone.localdate())
+
+    def test_reactivating_recomputes_from_today_without_backfilling(self, auth_client, user):
+        # 停用期間不補帳：暫停是使用者的意思表示，不是服務停機
+        today = timezone.localdate()
+        rule = self._rule(
+            user, day_of_month=5, is_active=False, next_run_date=today - timedelta(days=90)
+        )
+        resp = auth_client.patch(f'{self.URL}{rule.id}/', {'is_active': True}, format='json')
+        assert resp.status_code == 200
+        rule.refresh_from_db()
+        assert rule.next_run_date == next_due(5, today)
+        assert rule.next_run_date >= today
+
+    def test_editing_amount_leaves_next_run_date_untouched(self, auth_client, user):
+        rule = self._rule(user, day_of_month=5)
+        original = rule.next_run_date
+        resp = auth_client.patch(f'{self.URL}{rule.id}/', {'amount': '25000.00'}, format='json')
+        assert resp.status_code == 200
+        rule.refresh_from_db()
+        assert rule.next_run_date == original
+        assert rule.amount == Decimal('25000.00')
+
+
+# --- 定期定額任務：冪等（唯一約束）、catch-up、短月 clamp、單條失敗隔離 ---
+
+
+def _run_recurring_task(today):
+    """把「今天」釘死再跑任務。
+
+    一律 .apply() 不用 .delay()：容器的 manage.py test 吃生產 broker，.delay() 會把任務
+    投給 live worker，本地斷言什麼都收不到。
+    """
+    with mock.patch('ledger.tasks.timezone.localdate', return_value=today):
+        return post_due_recurring_rules.apply().get()
+
+
+def _make_rule(owner, **kwargs):
+    account = kwargs.pop('account', None) or Account.objects.create(
+        user=owner, name=kwargs.pop('account_name', '銀行'), type=Account.Type.BANK
+    )
+    kwargs.setdefault('amount', Decimal('18000.00'))
+    kwargs.setdefault('type', Transaction.Type.EXPENSE)
+    kwargs.setdefault('day_of_month', 5)
+    return RecurringRule.objects.create(user=owner, account=account, **kwargs)
+
+
+@pytest.mark.django_db
+def test_task_posts_due_rule(user):
+    category = Category.objects.create(user=user, name='居住')
+    rule = _make_rule(
+        user,
+        category=category,
+        name='房租',
+        description='每月房租',
+        next_run_date=date(2026, 7, 5),
+    )
+
+    assert _run_recurring_task(date(2026, 7, 5)) == 1
+
+    txn = Transaction.objects.get(source_rule=rule)
+    assert txn.user_id == user.id
+    assert txn.amount == Decimal('18000.00')
+    assert txn.type == Transaction.Type.EXPENSE
+    assert (txn.name, txn.description) == ('房租', '每月房租')
+    assert txn.category_id == category.id
+    # occurred_at ＝ 到期日的當地 00:00
+    local = timezone.localtime(txn.occurred_at)
+    assert (local.date(), local.time()) == (date(2026, 7, 5), time(0, 0))
+
+    rule.account.refresh_from_db()
+    assert rule.account.balance == Decimal('-18000.00')
+    rule.refresh_from_db()
+    assert rule.next_run_date == date(2026, 8, 5)
+
+
+@pytest.mark.django_db
+def test_task_skips_not_yet_due_and_inactive(user):
+    future = _make_rule(user, account_name='未到期', next_run_date=date(2026, 7, 10))
+    paused = _make_rule(
+        user, account_name='已停用', is_active=False, next_run_date=date(2026, 7, 1)
+    )
+
+    assert _run_recurring_task(date(2026, 7, 5)) == 0
+
+    assert not Transaction.objects.exists()
+    future.refresh_from_db()
+    paused.refresh_from_db()
+    assert future.next_run_date == date(2026, 7, 10)
+    assert paused.next_run_date == date(2026, 7, 1)
+
+
+@pytest.mark.django_db
+def test_task_is_idempotent_on_redelivery(user):
+    # 冪等的證明必須繞過游標：把 next_run_date 撥回原值再跑一次，模擬 beat 重複投遞／
+    # 任務重試。擋下第二筆的是 (source_rule, occurred_at) 唯一約束，不是游標。
+    rule = _make_rule(user, next_run_date=date(2026, 7, 5))
+    _run_recurring_task(date(2026, 7, 5))
+    RecurringRule.objects.filter(pk=rule.pk).update(next_run_date=date(2026, 7, 5))
+
+    assert _run_recurring_task(date(2026, 7, 5)) == 0  # 一筆都沒新建
+
+    assert Transaction.objects.filter(source_rule=rule).count() == 1
+    rule.account.refresh_from_db()
+    assert rule.account.balance == Decimal('-18000.00')  # 餘額沒被扣第二次
+
+
+@pytest.mark.django_db
+def test_task_catches_up_all_missed_occurrences(user):
+    # 停機三個月，房租還是欠三筆：逐期補建，occurred_at 各自是原到期日
+    rule = _make_rule(user, amount=Decimal('1000.00'), next_run_date=date(2026, 4, 5))
+
+    assert _run_recurring_task(date(2026, 6, 5)) == 3
+
+    dates = sorted(
+        timezone.localtime(t.occurred_at).date()
+        for t in Transaction.objects.filter(source_rule=rule)
+    )
+    assert dates == [date(2026, 4, 5), date(2026, 5, 5), date(2026, 6, 5)]
+    rule.account.refresh_from_db()
+    assert rule.account.balance == Decimal('-3000.00')
+    rule.refresh_from_db()
+    assert rule.next_run_date == date(2026, 7, 5)
+
+
+@pytest.mark.django_db
+def test_task_clamps_short_month(user):
+    # 每月 31 號：2 月落在月底，且不因此漂移——3 月仍回到 31 號
+    rule = _make_rule(
+        user, amount=Decimal('100.00'), day_of_month=31, next_run_date=date(2026, 1, 31)
+    )
+
+    assert _run_recurring_task(date(2026, 2, 28)) == 2
+
+    dates = sorted(
+        timezone.localtime(t.occurred_at).date()
+        for t in Transaction.objects.filter(source_rule=rule)
+    )
+    assert dates == [date(2026, 1, 31), date(2026, 2, 28)]
+    rule.refresh_from_db()
+    assert rule.next_run_date == date(2026, 3, 31)
+
+
+@pytest.mark.django_db
+def test_task_isolates_failing_rule(user, caplog):
+    # 一條爛規則不炸整批：它自己 rollback，其餘照建，錯誤留在 log 裡（背景任務沒有回應可看，
+    # log 是唯一的觀測窗）
+    bad = _make_rule(
+        user,
+        account_name='壞的',
+        amount=Decimal('111.00'),
+        day_of_month=5,
+        next_run_date=date(2026, 7, 5),
+    )
+    good = _make_rule(
+        user,
+        account_name='好的',
+        amount=Decimal('222.00'),
+        day_of_month=20,
+        next_run_date=date(2026, 7, 20),
+    )
+    real_apply = services.apply_to_balance
+
+    def explode(account_id, txn_type, amount):
+        if amount == Decimal('111.00'):
+            raise RuntimeError('模擬單條規則失敗')
+        real_apply(account_id, txn_type, amount)
+
+    with caplog.at_level(logging.ERROR, logger='ledger.tasks'):
+        with mock.patch('ledger.tasks.services.apply_to_balance', side_effect=explode):
+            assert _run_recurring_task(date(2026, 7, 25)) == 1
+
+    assert not Transaction.objects.filter(source_rule=bad).exists()
+    bad.refresh_from_db()
+    assert bad.next_run_date == date(2026, 7, 5)  # 游標沒推進，下次還會再試
+
+    assert Transaction.objects.filter(source_rule=good).count() == 1
+    good.account.refresh_from_db()
+    assert good.account.balance == Decimal('-222.00')
+    assert '處理失敗' in caplog.text
+
+
+@pytest.mark.django_db
+def test_task_keeps_users_isolated(user, other_user):
+    mine = _make_rule(user, amount=Decimal('100.00'), next_run_date=date(2026, 7, 5))
+    theirs = _make_rule(other_user, amount=Decimal('900.00'), next_run_date=date(2026, 7, 5))
+
+    assert _run_recurring_task(date(2026, 7, 5)) == 2
+
+    assert Transaction.objects.get(source_rule=mine).user_id == user.id
+    assert Transaction.objects.get(source_rule=theirs).user_id == other_user.id
+    mine.account.refresh_from_db()
+    theirs.account.refresh_from_db()
+    assert (mine.account.balance, theirs.account.balance) == (
+        Decimal('-100.00'),
+        Decimal('-900.00'),
+    )
+
+
+@pytest.mark.django_db
+def test_task_invalidates_balance_history_cache(user, django_capture_on_commit_callbacks):
+    # 自動記帳改了餘額 → 該 user 的 balance-history 快取必須失效，否則 TTL 內讀到舊值
+    rule = _make_rule(user, next_run_date=date(2026, 7, 5))
+    reports.balance_history_cached(user)  # 先把快取填起來
+    assert cache.get(f'reports:balance-history:{user.id}') is not None
+
+    with django_capture_on_commit_callbacks(execute=True):
+        _run_recurring_task(date(2026, 7, 5))
+
+    assert cache.get(f'reports:balance-history:{rule.user_id}') is None
 
 
 # --- carry-forward：建交易時把上月月度目標帶入「真實當下月」（mock 固定 now → 決定性）---
@@ -1676,6 +2106,7 @@ class TestOpenAPISchema:
         for sample in (
             '/api/auth/login/',
             '/api/ledger/transactions/',
+            '/api/ledger/recurring-rules/',
             '/api/ledger/reports/summary/range/',
             '/api/ledger/reports/balance-history/',
         ):
@@ -1690,7 +2121,14 @@ class TestOpenAPISchema:
         # 或 get_queryset 拿它過濾 UUID 外鍵會炸，spectacular 只降級成警告、整個 view 的
         # 推導被安靜丟棄，症狀是文件頁 Try it out 沒有 request body。五資源 POST 必帶 body。
         paths = SchemaGenerator().get_schema(request=None, public=True)['paths']
-        for resource in ('accounts', 'categories', 'tags', 'transactions', 'savings-goals'):
+        for resource in (
+            'accounts',
+            'categories',
+            'tags',
+            'transactions',
+            'savings-goals',
+            'recurring-rules',
+        ):
             assert 'requestBody' in paths[f'/api/ledger/{resource}/']['post'], resource
 
     def test_account_type_enum_named_stably(self):
@@ -1699,6 +2137,13 @@ class TestOpenAPISchema:
         # ENUM_NAME_OVERRIDES 釘住後，這裡看守它一直在。
         comps = SchemaGenerator().get_schema(request=None, public=True)['components']['schemas']
         assert 'AccountTypeEnum' in comps
+
+    def test_transaction_type_enum_named_stably(self):
+        # income/expense 這組 choices 由交易與定期定額規則共用，欄位都叫 type，與
+        # Account.Type 撞名 → 未釘名時退化成雜湊尾名（TypeB16Enum）。兩個 component
+        # 共用同一個 enum 是對的，名字必須穩定。
+        comps = SchemaGenerator().get_schema(request=None, public=True)['components']['schemas']
+        assert 'TransactionTypeEnum' in comps
 
     def test_report_money_fields_are_strings(self):
         # 報表金額在 schema 必須是 string(decimal)：client 拿 schema 生型別，

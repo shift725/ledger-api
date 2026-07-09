@@ -2,6 +2,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import dj_database_url
+from celery.schedules import crontab
 from decouple import Csv, config
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -131,6 +132,7 @@ SPECTACULAR_SETTINGS = {
         # 不開會產生雜湊尾名（Type346Enum）——釘死名稱，下游型別產生器才有穩定 enum 名。
         # 值必須是「模組層屬性」路徑（import_string 解不開巢狀的 Account.Type.choices）。
         'AccountTypeEnum': 'ledger.schema.ACCOUNT_TYPE_CHOICES',
+        'TransactionTypeEnum': 'ledger.schema.TRANSACTION_TYPE_CHOICES',
     },
 }
 
@@ -165,8 +167,12 @@ CELERY_TIMEZONE = TIME_ZONE  # beat 排程時刻用專案時區（Asia/Taipei）
 # 不讓 celery 接管 root logger → 任務 log 沿用上方 JSON 格式
 CELERY_WORKER_HIJACK_ROOT_LOGGER = False
 CELERY_BEAT_SCHEDULE = {
-    # 基建煙霧：每分鐘觸發，容器 log 出現即證 web→broker→worker→beat 鏈路通。
-    'heartbeat-every-minute': {'task': 'config.celery.heartbeat', 'schedule': 60.0},
+    # 每天 00:05（CELERY_TIMEZONE 解讀）把到期的定期定額規則轉成交易。挑 00:05 不挑 00:00：
+    # 整點是各家排程的尖峰，且跨日邊界剛過一點再跑，「今天」的判定不會踩在午夜那一瞬。
+    'post-due-recurring-rules': {
+        'task': 'ledger.tasks.post_due_recurring_rules',
+        'schedule': crontab(hour=0, minute=5),
+    },
 }
 
 # 其餘採 simplejwt 預設（HS256、SIGNING_KEY=SECRET_KEY、Bearer、id/user_id）。

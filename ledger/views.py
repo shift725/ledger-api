@@ -14,10 +14,11 @@ from rest_framework.response import Response
 
 from . import reports, schema, services
 from .filters import TransactionFilter
-from .models import Account, Category, SavingsGoal, Tag, Transaction
+from .models import Account, Category, RecurringRule, SavingsGoal, Tag, Transaction
 from .serializers import (
     AccountSerializer,
     CategorySerializer,
+    RecurringRuleSerializer,
     SavingsGoalSerializer,
     TagSerializer,
     TransactionSerializer,
@@ -80,11 +81,15 @@ class AccountViewSet(OwnedModelViewSet):
             self.get_queryset().filter(is_default=True).update(is_default=False)
 
     def destroy(self, request, *args, **kwargs):
-        # Transaction.account 是 PROTECT：刪有交易的帳戶會丟 ProtectedError，攔成 409 而非 500。
+        # Transaction.account 與 RecurringRule.account 都是 PROTECT：刪還被引用的帳戶會丟
+        # ProtectedError，攔成 409 而非 500。
         try:
             return super().destroy(request, *args, **kwargs)
         except ProtectedError:
-            return Response({'detail': '帳戶尚有交易，無法刪除'}, status=status.HTTP_409_CONFLICT)
+            return Response(
+                {'detail': '帳戶尚有交易或定期定額規則，無法刪除'},
+                status=status.HTTP_409_CONFLICT,
+            )
 
 
 class TransactionViewSet(OwnedModelViewSet):
@@ -145,6 +150,12 @@ class TransactionViewSet(OwnedModelViewSet):
 class SavingsGoalViewSet(OwnedModelViewSet):
     queryset = SavingsGoal.objects.all()
     serializer_class = SavingsGoalSerializer
+
+
+class RecurringRuleViewSet(OwnedModelViewSet):
+    # 序列化附帳戶／分類名稱：select_related 讓列表的查詢數不隨規則數成長。
+    queryset = RecurringRule.objects.select_related('account', 'category')
+    serializer_class = RecurringRuleSerializer
 
 
 def _int_param(raw, *, default, lo, hi, name):
