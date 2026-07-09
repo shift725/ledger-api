@@ -155,6 +155,20 @@ LOGGING = {
     },
 }
 
+# Celery：背景任務佇列。容器由 compose 注入 CELERY_BROKER_URL（Redis db 1，cache 用 db 0）；
+# 無值（本機 venv／CI）→ 落 in-memory broker 並強制 ALWAYS_EAGER：任務就地同步執行、不需外部
+# 服務，測任務邏輯而非佇列本身（CI 零改動）。CELERY_ 前綴由 config/celery.py 的 namespace 讀取。
+CELERY_BROKER_URL = config('CELERY_BROKER_URL', default='memory://')
+CELERY_TASK_ALWAYS_EAGER = CELERY_BROKER_URL == 'memory://'
+CELERY_TASK_EAGER_PROPAGATES = True  # eager 下任務例外直接上拋，否則被吞、測試看不到失敗
+CELERY_TIMEZONE = TIME_ZONE  # beat 排程時刻用專案時區（Asia/Taipei）解讀
+# 不讓 celery 接管 root logger → 任務 log 沿用上方 JSON 格式
+CELERY_WORKER_HIJACK_ROOT_LOGGER = False
+CELERY_BEAT_SCHEDULE = {
+    # 基建煙霧：每分鐘觸發，容器 log 出現即證 web→broker→worker→beat 鏈路通。
+    'heartbeat-every-minute': {'task': 'config.celery.heartbeat', 'schedule': 60.0},
+}
+
 # 其餘採 simplejwt 預設（HS256、SIGNING_KEY=SECRET_KEY、Bearer、id/user_id）。
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
