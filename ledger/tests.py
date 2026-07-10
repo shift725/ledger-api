@@ -9,6 +9,7 @@ import logging
 import threading
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
+from pathlib import Path
 from unittest import mock
 
 try:
@@ -21,6 +22,8 @@ except ImportError as exc:
     import unittest
 
     raise unittest.SkipTest('ledger 測試為 pytest 專屬，容器 Django runner 略過') from exc
+import yaml
+from django.conf import settings
 from django.core.cache import cache
 from django.core.management import call_command
 from django.db import IntegrityError, connection, transaction
@@ -2159,3 +2162,16 @@ class TestOpenAPISchema:
             prop = components[component]['properties'][field]
             assert prop['type'] == 'string', (component, field)
             assert prop['format'] == 'decimal', (component, field)
+
+    def test_frozen_contract_matches_generated_schema(self):
+        # 契約凍結看守：repo 根 openapi.yaml 是對前端凍結的契約落檔（下游拿它生型別）。
+        # 動到 API 形狀的任何變更都會在這裡紅——刻意變更的儀式是重新 export＋依 SemVer
+        # 升版（只加不改=minor、破壞形狀=major）：
+        #   docker compose exec --user root web \
+        #     python manage.py spectacular --validate --file /app/openapi.yaml
+        # 語意比對（parse 後結構相等）而非 byte 比對：換行/縮排差異不算漂移。
+        frozen = yaml.safe_load(
+            (Path(settings.BASE_DIR) / 'openapi.yaml').read_text(encoding='utf-8')
+        )
+        generated = SchemaGenerator().get_schema(request=None, public=True)
+        assert generated == frozen, 'openapi.yaml 落後於現行 schema——用上方指令重新 export'
