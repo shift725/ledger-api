@@ -1,0 +1,2569 @@
+openapi: 3.0.3
+info:
+  title: Ledger API
+  version: 1.0.0
+  description: 記帳 REST API：JWT 認證、帳戶／分類／標籤／交易／儲蓄目標 CRUD 與報表聚合。
+paths:
+  /api/auth/login/:
+    post:
+      operationId: auth_login_create
+      description: POST /api/auth/login/ — 以 email + password 換取 JWT，回應附帶 user。
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomTokenObtainPair'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CustomTokenObtainPair'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CustomTokenObtainPair'
+        required: true
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomTokenObtainPair'
+          description: ''
+  /api/auth/logout/:
+    post:
+      operationId: auth_logout_create
+      description: POST /api/auth/logout/ — 將傳入的 refresh token 加入黑名單。
+      tags:
+      - auth
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          description: No response body
+  /api/auth/register/:
+    post:
+      operationId: auth_register_create
+      description: POST /api/auth/register/ — 註冊成功後直接回傳 user 與 JWT。
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRegister'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/UserRegister'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/UserRegister'
+        required: true
+      security:
+      - {}
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserRegister'
+          description: ''
+  /api/auth/token/refresh/:
+    post:
+      operationId: auth_token_refresh_create
+      description: |-
+        Takes a refresh type JSON web token and returns an access type JSON web
+        token if the refresh token is valid.
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRefresh'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TokenRefresh'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TokenRefresh'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenRefresh'
+          description: ''
+  /api/auth/token/verify/:
+    post:
+      operationId: auth_token_verify_create
+      description: |-
+        Takes a token and indicates if it is valid.  This view provides no
+        information about a token's fitness for a particular use.
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenVerify'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TokenVerify'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TokenVerify'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenVerify'
+          description: ''
+  /api/auth/users/:
+    get:
+      operationId: auth_users_list
+      tags:
+      - auth
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+          description: ''
+  /api/auth/users/{id}/:
+    get:
+      operationId: auth_users_retrieve
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - auth
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+    patch:
+      operationId: auth_users_partial_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedUser'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedUser'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedUser'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+  /api/ledger/accounts/:
+    get:
+      operationId: ledger_accounts_list
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedAccountList'
+          description: ''
+    post:
+      operationId: ledger_accounts_create
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      tags:
+      - ledger
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Account'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Account'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Account'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+          description: ''
+  /api/ledger/accounts/{id}/:
+    get:
+      operationId: ledger_accounts_retrieve
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this account.
+        required: true
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+          description: ''
+    put:
+      operationId: ledger_accounts_update
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this account.
+        required: true
+      tags:
+      - ledger
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Account'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Account'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Account'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+          description: ''
+    patch:
+      operationId: ledger_accounts_partial_update
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this account.
+        required: true
+      tags:
+      - ledger
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedAccount'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedAccount'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedAccount'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+          description: ''
+    delete:
+      operationId: ledger_accounts_destroy
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this account.
+        required: true
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/ledger/categories/:
+    get:
+      operationId: ledger_categories_list
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedCategoryList'
+          description: ''
+    post:
+      operationId: ledger_categories_create
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      tags:
+      - ledger
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Category'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Category'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Category'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+          description: ''
+  /api/ledger/categories/{id}/:
+    get:
+      operationId: ledger_categories_retrieve
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this category.
+        required: true
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+          description: ''
+    put:
+      operationId: ledger_categories_update
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this category.
+        required: true
+      tags:
+      - ledger
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Category'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Category'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Category'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+          description: ''
+    patch:
+      operationId: ledger_categories_partial_update
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this category.
+        required: true
+      tags:
+      - ledger
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedCategory'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedCategory'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedCategory'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+          description: ''
+    delete:
+      operationId: ledger_categories_destroy
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this category.
+        required: true
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/ledger/recurring-rules/:
+    get:
+      operationId: ledger_recurring_rules_list
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedRecurringRuleList'
+          description: ''
+    post:
+      operationId: ledger_recurring_rules_create
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      tags:
+      - ledger
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecurringRule'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RecurringRule'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RecurringRule'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecurringRule'
+          description: ''
+  /api/ledger/recurring-rules/{id}/:
+    get:
+      operationId: ledger_recurring_rules_retrieve
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this recurring rule.
+        required: true
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecurringRule'
+          description: ''
+    put:
+      operationId: ledger_recurring_rules_update
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this recurring rule.
+        required: true
+      tags:
+      - ledger
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecurringRule'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RecurringRule'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RecurringRule'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecurringRule'
+          description: ''
+    patch:
+      operationId: ledger_recurring_rules_partial_update
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this recurring rule.
+        required: true
+      tags:
+      - ledger
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedRecurringRule'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedRecurringRule'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedRecurringRule'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecurringRule'
+          description: ''
+    delete:
+      operationId: ledger_recurring_rules_destroy
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this recurring rule.
+        required: true
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/ledger/reports/balance/:
+    get:
+      operationId: ledger_reports_balance_retrieve
+      description: |-
+        唯讀報表端點集合（/api/ledger/reports/…）：各 action 委派 reports.py 的純函式。
+
+        用 ViewSet（非 ModelViewSet）：報表不是 CRUD 資源、無單一 queryset/序列化器；每支都吃
+        request.user 過濾，資安邊界落在 reports 函式內。
+      summary: 總餘額與各帳戶餘額
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceOverview'
+          description: ''
+  /api/ledger/reports/balance-history/:
+    get:
+      operationId: ledger_reports_balance_history_list
+      description: |-
+        唯讀報表端點集合（/api/ledger/reports/…）：各 action 委派 reports.py 的純函式。
+
+        用 ViewSet（非 ModelViewSet）：報表不是 CRUD 資源、無單一 queryset/序列化器；每支都吃
+        request.user 過濾，資安邊界落在 reports 函式內。
+      summary: 每帳戶逐月餘額（連續月份、缺月沿用前值）
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BalanceHistoryAccount'
+          description: ''
+  /api/ledger/reports/savings-goal-status/:
+    get:
+      operationId: ledger_reports_savings_goal_status_retrieve
+      description: |-
+        唯讀報表端點集合（/api/ledger/reports/…）：各 action 委派 reports.py 的純函式。
+
+        用 ViewSet（非 ModelViewSet）：報表不是 CRUD 資源、無單一 queryset/序列化器；每支都吃
+        request.user 過濾，資安邊界落在 reports 函式內。
+      summary: 儲蓄目標達成狀態（帶 month＝月度、省略＝年度）
+      parameters:
+      - in: query
+        name: month
+        schema:
+          type: integer
+        description: 月 1–12；帶＝查月度目標、省略＝查年度目標（非預設當月）。
+      - in: query
+        name: year
+        schema:
+          type: integer
+        description: 西元年 1–9999；未帶＝當前時區的今年。
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SavingsGoalStatus'
+          description: ''
+  /api/ledger/reports/summary/:
+    get:
+      operationId: ledger_reports_summary_retrieve
+      description: |-
+        唯讀報表端點集合（/api/ledger/reports/…）：各 action 委派 reports.py 的純函式。
+
+        用 ViewSet（非 ModelViewSet）：報表不是 CRUD 資源、無單一 queryset/序列化器；每支都吃
+        request.user 過濾，資安邊界落在 reports 函式內。
+      summary: 指定月收支
+      parameters:
+      - in: query
+        name: month
+        schema:
+          type: integer
+        description: 月 1–12；未帶＝當前時區的本月。
+      - in: query
+        name: year
+        schema:
+          type: integer
+        description: 西元年 1–9999；未帶＝當前時區的今年。
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MonthSummary'
+          description: ''
+  /api/ledger/reports/summary/by-category/:
+    get:
+      operationId: ledger_reports_summary_by_category_retrieve
+      description: |-
+        唯讀報表端點集合（/api/ledger/reports/…）：各 action 委派 reports.py 的純函式。
+
+        用 ViewSet（非 ModelViewSet）：報表不是 CRUD 資源、無單一 queryset/序列化器；每支都吃
+        request.user 過濾，資安邊界落在 reports 函式內。
+      summary: 指定月各分類收支（單值 FK，各桶加總＝當月總額）
+      parameters:
+      - in: query
+        name: month
+        schema:
+          type: integer
+        description: 月 1–12；未帶＝當前時區的本月。
+      - in: query
+        name: year
+        schema:
+          type: integer
+        description: 西元年 1–9999；未帶＝當前時區的今年。
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryBreakdown'
+          description: ''
+  /api/ledger/reports/summary/by-tag/:
+    get:
+      operationId: ledger_reports_summary_by_tag_retrieve
+      description: |-
+        唯讀報表端點集合（/api/ledger/reports/…）：各 action 委派 reports.py 的純函式。
+
+        用 ViewSet（非 ModelViewSet）：報表不是 CRUD 資源、無單一 queryset/序列化器；每支都吃
+        request.user 過濾，資安邊界落在 reports 函式內。
+      summary: 指定月各標籤收支（M2M 可重疊維度，不可加總當總額）
+      parameters:
+      - in: query
+        name: month
+        schema:
+          type: integer
+        description: 月 1–12；未帶＝當前時區的本月。
+      - in: query
+        name: year
+        schema:
+          type: integer
+        description: 西元年 1–9999；未帶＝當前時區的今年。
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TagBreakdown'
+          description: ''
+  /api/ledger/reports/summary/range/:
+    get:
+      operationId: ledger_reports_summary_range_retrieve
+      description: |-
+        唯讀報表端點集合（/api/ledger/reports/…）：各 action 委派 reports.py 的純函式。
+
+        用 ViewSet（非 ModelViewSet）：報表不是 CRUD 資源、無單一 queryset/序列化器；每支都吃
+        request.user 過濾，資安邊界落在 reports 函式內。
+      summary: 任意日期區間收支
+      parameters:
+      - in: query
+        name: end
+        schema:
+          type: string
+          format: date
+        description: 迄日（含當日），YYYY-MM-DD；須 start ≤ end。
+        required: true
+      - in: query
+        name: start
+        schema:
+          type: string
+          format: date
+        description: 起日（含），YYYY-MM-DD。
+        required: true
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RangeSummary'
+          description: ''
+  /api/ledger/reports/today/:
+    get:
+      operationId: ledger_reports_today_retrieve
+      description: |-
+        唯讀報表端點集合（/api/ledger/reports/…）：各 action 委派 reports.py 的純函式。
+
+        用 ViewSet（非 ModelViewSet）：報表不是 CRUD 資源、無單一 queryset/序列化器；每支都吃
+        request.user 過濾，資安邊界落在 reports 函式內。
+      summary: 今日（當前時區）收支
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TodaySummary'
+          description: ''
+  /api/ledger/savings-goals/:
+    get:
+      operationId: ledger_savings_goals_list
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedSavingsGoalList'
+          description: ''
+    post:
+      operationId: ledger_savings_goals_create
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      tags:
+      - ledger
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SavingsGoal'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SavingsGoal'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SavingsGoal'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SavingsGoal'
+          description: ''
+  /api/ledger/savings-goals/{id}/:
+    get:
+      operationId: ledger_savings_goals_retrieve
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this savings goal.
+        required: true
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SavingsGoal'
+          description: ''
+    put:
+      operationId: ledger_savings_goals_update
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this savings goal.
+        required: true
+      tags:
+      - ledger
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SavingsGoal'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/SavingsGoal'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/SavingsGoal'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SavingsGoal'
+          description: ''
+    patch:
+      operationId: ledger_savings_goals_partial_update
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this savings goal.
+        required: true
+      tags:
+      - ledger
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedSavingsGoal'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedSavingsGoal'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedSavingsGoal'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SavingsGoal'
+          description: ''
+    delete:
+      operationId: ledger_savings_goals_destroy
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this savings goal.
+        required: true
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/ledger/tags/:
+    get:
+      operationId: ledger_tags_list
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedTagList'
+          description: ''
+    post:
+      operationId: ledger_tags_create
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      tags:
+      - ledger
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Tag'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Tag'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Tag'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tag'
+          description: ''
+  /api/ledger/tags/{id}/:
+    get:
+      operationId: ledger_tags_retrieve
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this tag.
+        required: true
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tag'
+          description: ''
+    put:
+      operationId: ledger_tags_update
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this tag.
+        required: true
+      tags:
+      - ledger
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Tag'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Tag'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Tag'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tag'
+          description: ''
+    patch:
+      operationId: ledger_tags_partial_update
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this tag.
+        required: true
+      tags:
+      - ledger
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedTag'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedTag'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedTag'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tag'
+          description: ''
+    delete:
+      operationId: ledger_tags_destroy
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this tag.
+        required: true
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/ledger/transactions/:
+    get:
+      operationId: ledger_transactions_list
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: query
+        name: account
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: amount_max
+        schema:
+          type: number
+      - in: query
+        name: amount_min
+        schema:
+          type: number
+      - in: query
+        name: category
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: occurred_after
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: occurred_before
+        schema:
+          type: string
+          format: date-time
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: tags_all
+        schema:
+          type: array
+          items:
+            type: string
+            format: uuid
+        description: Multiple values may be separated by commas.
+        explode: false
+        style: form
+      - in: query
+        name: tags_any
+        schema:
+          type: array
+          items:
+            type: string
+            format: uuid
+        description: Multiple values may be separated by commas.
+        explode: false
+        style: form
+      - in: query
+        name: type
+        schema:
+          type: string
+          enum:
+          - expense
+          - income
+        description: |-
+          * `income` - 收入
+          * `expense` - 支出
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedTransactionList'
+          description: ''
+    post:
+      operationId: ledger_transactions_create
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      tags:
+      - ledger
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Transaction'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Transaction'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Transaction'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+          description: ''
+  /api/ledger/transactions/{id}/:
+    get:
+      operationId: ledger_transactions_retrieve
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this transaction.
+        required: true
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+          description: ''
+    put:
+      operationId: ledger_transactions_update
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this transaction.
+        required: true
+      tags:
+      - ledger
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Transaction'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Transaction'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Transaction'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+          description: ''
+    patch:
+      operationId: ledger_transactions_partial_update
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this transaction.
+        required: true
+      tags:
+      - ledger
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedTransaction'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedTransaction'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedTransaction'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+          description: ''
+    delete:
+      operationId: ledger_transactions_destroy
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this transaction.
+        required: true
+      tags:
+      - ledger
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+components:
+  schemas:
+    Account:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          maxLength: 100
+        type:
+          $ref: '#/components/schemas/AccountTypeEnum'
+        balance:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          readOnly: true
+        is_default:
+          type: boolean
+      required:
+      - balance
+      - id
+      - name
+      - type
+    AccountTypeEnum:
+      enum:
+      - cash
+      - bank
+      - credit_card
+      - e_wallet
+      type: string
+      description: |-
+        * `cash` - 現金
+        * `bank` - 銀行
+        * `credit_card` - 信用卡
+        * `e_wallet` - 電子錢包
+    BalanceHistoryAccount:
+      type: object
+      properties:
+        account_id:
+          type: string
+          format: uuid
+        account_name:
+          type: string
+        months:
+          type: array
+          items:
+            $ref: '#/components/schemas/BalanceHistoryMonth'
+      required:
+      - account_id
+      - account_name
+      - months
+    BalanceHistoryMonth:
+      type: object
+      properties:
+        month:
+          type: string
+          description: YYYY-MM
+        balance:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+      required:
+      - balance
+      - month
+    BalanceOverview:
+      type: object
+      properties:
+        total_balance:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        accounts:
+          type: array
+          items:
+            $ref: '#/components/schemas/BalanceOverviewAccount'
+      required:
+      - accounts
+      - total_balance
+    BalanceOverviewAccount:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        type:
+          $ref: '#/components/schemas/AccountTypeEnum'
+        balance:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+      required:
+      - balance
+      - id
+      - name
+      - type
+    Category:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 255
+      required:
+      - id
+      - name
+    CategoryBreakdown:
+      type: object
+      properties:
+        year:
+          type: integer
+        month:
+          type: integer
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/CategoryBreakdownItem'
+      required:
+      - categories
+      - month
+      - year
+    CategoryBreakdownItem:
+      type: object
+      properties:
+        category_id:
+          type: string
+          format: uuid
+          nullable: true
+        category_name:
+          type: string
+          nullable: true
+        income:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        expense:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+      required:
+      - category_id
+      - category_name
+      - expense
+      - income
+    CustomTokenObtainPair:
+      type: object
+      description: |-
+        自訂 Token 序列化器
+        在 JWT payload 中加入額外的使用者資訊
+      properties:
+        email:
+          type: string
+          writeOnly: true
+        password:
+          type: string
+          writeOnly: true
+      required:
+      - email
+      - password
+    MonthSummary:
+      type: object
+      properties:
+        year:
+          type: integer
+        month:
+          type: integer
+        income:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        expense:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        net:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+      required:
+      - expense
+      - income
+      - month
+      - net
+      - year
+    PaginatedAccountList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Account'
+    PaginatedCategoryList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+    PaginatedRecurringRuleList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecurringRule'
+    PaginatedSavingsGoalList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SavingsGoal'
+    PaginatedTagList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tag'
+    PaginatedTransactionList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Transaction'
+    PatchedAccount:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          maxLength: 100
+        type:
+          $ref: '#/components/schemas/AccountTypeEnum'
+        balance:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          readOnly: true
+        is_default:
+          type: boolean
+    PatchedCategory:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 255
+    PatchedRecurringRule:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        account:
+          type: string
+          format: uuid
+        category:
+          type: string
+          format: uuid
+          nullable: true
+        amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        type:
+          $ref: '#/components/schemas/TransactionTypeEnum'
+        name:
+          type: string
+          maxLength: 200
+        description:
+          type: string
+        day_of_month:
+          type: integer
+          maximum: 31
+          minimum: 1
+        is_active:
+          type: boolean
+        next_run_date:
+          type: string
+          format: date
+          readOnly: true
+        account_name:
+          type: string
+          readOnly: true
+        category_name:
+          type: string
+          readOnly: true
+          nullable: true
+    PatchedSavingsGoal:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        period_type:
+          $ref: '#/components/schemas/PeriodTypeEnum'
+        year:
+          type: integer
+          maximum: 32767
+          minimum: 0
+        month:
+          type: integer
+          maximum: 32767
+          minimum: 0
+          nullable: true
+        amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+    PatchedTag:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          maxLength: 50
+        description:
+          type: string
+          maxLength: 255
+    PatchedTransaction:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        account:
+          type: string
+          format: uuid
+        category:
+          type: string
+          format: uuid
+          nullable: true
+        amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        type:
+          $ref: '#/components/schemas/TransactionTypeEnum'
+        name:
+          type: string
+          maxLength: 200
+        description:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+        tags:
+          type: array
+          items:
+            type: string
+            format: uuid
+        source_rule:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        account_name:
+          type: string
+          readOnly: true
+        category_name:
+          type: string
+          readOnly: true
+          nullable: true
+        tag_names:
+          type: array
+          items:
+            type: string
+          readOnly: true
+    PatchedUser:
+      type: object
+      description: 使用者序列化器
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        username:
+          type: string
+          description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+            only.
+          pattern: ^[\w.@+-]+$
+          maxLength: 150
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        phone:
+          type: string
+          maxLength: 20
+        role:
+          $ref: '#/components/schemas/RoleEnum'
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+    PeriodTypeEnum:
+      enum:
+      - monthly
+      - yearly
+      type: string
+      description: |-
+        * `monthly` - 月度
+        * `yearly` - 年度
+    RangeSummary:
+      type: object
+      properties:
+        start:
+          type: string
+          format: date
+        end:
+          type: string
+          format: date
+        income:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        expense:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        net:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+      required:
+      - end
+      - expense
+      - income
+      - net
+      - start
+    RecurringRule:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        account:
+          type: string
+          format: uuid
+        category:
+          type: string
+          format: uuid
+          nullable: true
+        amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        type:
+          $ref: '#/components/schemas/TransactionTypeEnum'
+        name:
+          type: string
+          maxLength: 200
+        description:
+          type: string
+        day_of_month:
+          type: integer
+          maximum: 31
+          minimum: 1
+        is_active:
+          type: boolean
+        next_run_date:
+          type: string
+          format: date
+          readOnly: true
+        account_name:
+          type: string
+          readOnly: true
+        category_name:
+          type: string
+          readOnly: true
+          nullable: true
+      required:
+      - account
+      - account_name
+      - amount
+      - category_name
+      - day_of_month
+      - id
+      - next_run_date
+      - type
+    RoleEnum:
+      enum:
+      - admin
+      - staff
+      - member
+      type: string
+      description: |-
+        * `admin` - 管理員
+        * `staff` - 員工
+        * `member` - 會員
+    SavingsGoal:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        period_type:
+          $ref: '#/components/schemas/PeriodTypeEnum'
+        year:
+          type: integer
+          maximum: 32767
+          minimum: 0
+        month:
+          type: integer
+          maximum: 32767
+          minimum: 0
+          nullable: true
+        amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+      required:
+      - amount
+      - id
+      - period_type
+      - year
+    SavingsGoalStatus:
+      type: object
+      properties:
+        period_type:
+          $ref: '#/components/schemas/PeriodTypeEnum'
+        year:
+          type: integer
+        month:
+          type: integer
+          nullable: true
+        goal_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          nullable: true
+        actual_net:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        difference:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          nullable: true
+        achieved:
+          type: boolean
+          nullable: true
+      required:
+      - achieved
+      - actual_net
+      - difference
+      - goal_amount
+      - month
+      - period_type
+      - year
+    Tag:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          maxLength: 50
+        description:
+          type: string
+          maxLength: 255
+      required:
+      - id
+      - name
+    TagBreakdown:
+      type: object
+      properties:
+        year:
+          type: integer
+        month:
+          type: integer
+        tags:
+          type: array
+          items:
+            $ref: '#/components/schemas/TagBreakdownItem'
+      required:
+      - month
+      - tags
+      - year
+    TagBreakdownItem:
+      type: object
+      properties:
+        tag_id:
+          type: string
+          format: uuid
+        tag_name:
+          type: string
+        income:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        expense:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+      required:
+      - expense
+      - income
+      - tag_id
+      - tag_name
+    TodaySummary:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        expense:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        income:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        net:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+      required:
+      - date
+      - expense
+      - income
+      - net
+    TokenRefresh:
+      type: object
+      properties:
+        access:
+          type: string
+          readOnly: true
+        refresh:
+          type: string
+      required:
+      - access
+      - refresh
+    TokenVerify:
+      type: object
+      properties:
+        token:
+          type: string
+          writeOnly: true
+      required:
+      - token
+    Transaction:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        account:
+          type: string
+          format: uuid
+        category:
+          type: string
+          format: uuid
+          nullable: true
+        amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        type:
+          $ref: '#/components/schemas/TransactionTypeEnum'
+        name:
+          type: string
+          maxLength: 200
+        description:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+        tags:
+          type: array
+          items:
+            type: string
+            format: uuid
+        source_rule:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        account_name:
+          type: string
+          readOnly: true
+        category_name:
+          type: string
+          readOnly: true
+          nullable: true
+        tag_names:
+          type: array
+          items:
+            type: string
+          readOnly: true
+      required:
+      - account
+      - account_name
+      - amount
+      - category_name
+      - id
+      - source_rule
+      - tag_names
+      - type
+    TransactionTypeEnum:
+      enum:
+      - income
+      - expense
+      type: string
+      description: |-
+        * `income` - 收入
+        * `expense` - 支出
+    User:
+      type: object
+      description: 使用者序列化器
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        username:
+          type: string
+          description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+            only.
+          pattern: ^[\w.@+-]+$
+          maxLength: 150
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        phone:
+          type: string
+          maxLength: 20
+        role:
+          $ref: '#/components/schemas/RoleEnum'
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - email
+      - id
+      - username
+    UserRegister:
+      type: object
+      description: 使用者註冊序列化器
+      properties:
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          writeOnly: true
+        password_confirm:
+          type: string
+          writeOnly: true
+        phone:
+          type: string
+          maxLength: 20
+      required:
+      - email
+      - password
+      - password_confirm
+      - username
+  securitySchemes:
+    jwtAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
