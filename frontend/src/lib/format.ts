@@ -8,3 +8,9 @@ export function formatAmount(value: string): string {
   const grouped = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
   return (negative ? '-' : '') + grouped + (frac !== undefined ? `.${frac}` : '')
 }
+
+// Date → <input type="datetime-local"> 值（YYYY-MM-DDTHH:mm，當地時間、無秒無時區）。
+export function toDatetimeLocal(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+}

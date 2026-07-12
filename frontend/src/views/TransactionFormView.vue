@@ -1,0 +1,296 @@
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { api } from '@/api/client'
+import type { components } from '@/api/schema'
+import { useReferenceStore } from '@/stores/reference'
+import { toDatetimeLocal } from '@/lib/format'
+import { toast } from '@/lib/toast'
+import Card from '@/components/ui/UiCard.vue'
+
+type Transaction = components['schemas']['Transaction']
+// 契約無 TransactionRequest（寫入與回應共用 Transaction）→ 送出前剝唯讀衍生欄。
+type TransactionWrite = Omit<
+  Transaction,
+  'id' | 'source_rule' | 'account_name' | 'category_name' | 'tag_names'
+>
+
+const router = useRouter()
+const route = useRoute()
+const reference = useReferenceStore()
+
+// 有 :id ＝編輯（同表單預填）；否則新增。
+const id = computed(() => route.params.id as string | undefined)
+const isEdit = computed(() => Boolean(id.value))
+const notFound = ref(false)
+const deleteDialog = ref<HTMLDialogElement | null>(null)
+
+// 契約必填僅 account/amount/type → 主層極簡，其餘進次層收合。
+const form = reactive({
+  amount: '',
+  type: 'expense' as 'income' | 'expense',
+  account: '',
+  occurredAt: toDatetimeLocal(new Date()), // 預設現在，一律明送
+  category: '',
+  tags: [] as string[],
+  name: '',
+  description: '',
+})
+
+const showMore = ref(false)
+const amountError = ref('')
+const serverError = ref('')
+
+const AMOUNT_RE = /^\d+(\.\d{1,2})?$/
+function validateAmount(): boolean {
+  if (!AMOUNT_RE.test(form.amount) || Number(form.amount) <= 0) {
+    amountError.value = '金額需為大於 0 的數字（至多兩位小數）'
+    return false
+  }
+  amountError.value = ''
+  return true
+}
+
+function toggleTag(id: string) {
+  const i = form.tags.indexOf(id)
+  if (i === -1) form.tags.push(id)
+  else form.tags.splice(i, 1)
+}
+
+// 後端 400 逐欄訊息攤平如實顯示（DRF 回 {欄位:[訊息]} 或 {detail:訊息}）。
+function messagesFrom(err: unknown): string {
+  if (!err || typeof err !== 'object') return '儲存失敗，請稍後再試'
+  const parts: string[] = []
+  for (const v of Object.values(err as Record<string, unknown>)) {
+    if (Array.isArray(v)) parts.push(...v.map(String))
+    else if (typeof v === 'string') parts.push(v)
+  }
+  return parts.join('；') || '儲存失敗，請稍後再試'
+}
+
+async function submit() {
+  serverError.value = ''
+  if (!validateAmount()) return
+  const payload = {
+    account: form.account,
+    amount: form.amount,
+    type: form.type,
+    occurred_at: new Date(form.occurredAt).toISOString(), // 明送 instant
+    category: form.category || null,
+    tags: form.tags,
+    name: form.name,
+    description: form.description,
+  } satisfies TransactionWrite
+  // 契約以同一 Transaction 型別描述 body，含 readonly 衍生欄 → 單點轉型送出。
+  const body = payload as unknown as Transaction
+  const { error } = isEdit.value
+    ? await api.PATCH('/api/ledger/transactions/{id}/', {
+        params: { path: { id: id.value! } },
+        body,
+      })
+    : await api.POST('/api/ledger/transactions/', { body })
+  if (error) {
+    serverError.value = messagesFrom(error)
+    return
+  }
+  toast('已儲存')
+  router.push('/transactions')
+}
+
+async function confirmDelete() {
+  deleteDialog.value?.close?.()
+  const { error } = await api.DELETE('/api/ledger/transactions/{id}/', {
+    params: { path: { id: id.value! } },
+  })
+  if (error) {
+    serverError.value = messagesFrom(error)
+    return
+  }
+  toast('已刪除')
+  router.push('/transactions')
+}
+
+onMounted(async () => {
+  await reference.ensure()
+  if (isEdit.value) {
+    const { data, error } = await api.GET('/api/ledger/transactions/{id}/', {
+      params: { path: { id: id.value! } },
+    })
+    if (error || !data) {
+      notFound.value = true // 跨用戶亦回 404（後端藏存在性）→ 一律「找不到」，不提權限
+      return
+    }
+    form.amount = data.amount
+    form.type = data.type
+    form.account = data.account
+    form.occurredAt = toDatetimeLocal(new Date(data.occurred_at ?? Date.now()))
+    form.category = data.category ?? ''
+    form.tags = [...(data.tags ?? [])]
+    form.name = data.name ?? ''
+    form.description = data.description ?? ''
+    // 次層有值就展開，讓使用者一眼看到既有內容
+    if (form.category || form.tags.length || form.name || form.description) showMore.value = true
+  } else {
+    const def = reference.accounts.find((a) => a.is_default) ?? reference.accounts[0]
+    if (def) form.account = def.id
+  }
+})
+</script>
+
+<template>
+  <header class="mb-3.5">
+    <h1 class="text-xl font-medium">{{ isEdit ? '編輯交易' : '記一筆' }}</h1>
+  </header>
+
+  <p v-if="notFound" class="text-ink-2 py-10 text-center">找不到這筆交易</p>
+
+  <form v-else class="flex flex-col gap-2.5" @submit.prevent="submit">
+    <Card class="flex flex-col gap-3">
+      <!-- 收支切換 -->
+      <div class="border-hairline flex overflow-hidden rounded-lg border">
+        <button
+          v-for="opt in [
+            { v: 'expense', label: '支出' },
+            { v: 'income', label: '收入' },
+          ]"
+          :key="opt.v"
+          type="button"
+          class="flex-1 py-2 text-sm"
+          :class="form.type === opt.v ? 'bg-brand-fill text-white' : 'text-ink-2'"
+          @click="form.type = opt.v as 'income' | 'expense'"
+        >
+          {{ opt.label }}
+        </button>
+      </div>
+
+      <!-- 金額 -->
+      <label class="flex flex-col gap-1">
+        <span class="text-ink-2 text-sm">金額</span>
+        <input
+          v-model="form.amount"
+          data-test="form-amount"
+          inputmode="decimal"
+          placeholder="0.00"
+          class="border-hairline rounded-lg border px-3 py-2 text-lg"
+        />
+        <span v-if="amountError" class="text-expense text-sm">{{ amountError }}</span>
+      </label>
+
+      <!-- 帳戶 -->
+      <label class="flex flex-col gap-1">
+        <span class="text-ink-2 text-sm">帳戶</span>
+        <select
+          v-model="form.account"
+          data-test="form-account"
+          class="border-hairline rounded-lg border px-3 py-2"
+        >
+          <option v-for="a in reference.accounts" :key="a.id" :value="a.id">{{ a.name }}</option>
+        </select>
+      </label>
+
+      <!-- 日期時間 -->
+      <label class="flex flex-col gap-1">
+        <span class="text-ink-2 text-sm">日期時間</span>
+        <input
+          v-model="form.occurredAt"
+          type="datetime-local"
+          class="border-hairline rounded-lg border px-3 py-2"
+        />
+      </label>
+    </Card>
+
+    <!-- 次層收合 -->
+    <button
+      type="button"
+      data-test="toggle-more"
+      class="text-brand-text text-sm font-medium"
+      @click="showMore = !showMore"
+    >
+      {{ showMore ? '收合' : '更多欄位' }}
+    </button>
+
+    <Card v-if="showMore" class="flex flex-col gap-3">
+      <label class="flex flex-col gap-1">
+        <span class="text-ink-2 text-sm">分類</span>
+        <select
+          v-model="form.category"
+          data-test="form-category"
+          class="border-hairline rounded-lg border px-3 py-2"
+        >
+          <option value="">未分類</option>
+          <option v-for="c in reference.categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+        </select>
+      </label>
+
+      <div v-if="reference.tags.length" class="flex flex-col gap-1">
+        <span class="text-ink-2 text-sm">標籤</span>
+        <div class="flex flex-wrap gap-x-3 gap-y-1 text-sm">
+          <label v-for="t in reference.tags" :key="t.id" class="flex items-center gap-1">
+            <input
+              type="checkbox"
+              :checked="form.tags.includes(t.id)"
+              @change="toggleTag(t.id)"
+            />{{ t.name }}
+          </label>
+        </div>
+      </div>
+
+      <label class="flex flex-col gap-1">
+        <span class="text-ink-2 text-sm">名稱</span>
+        <input
+          v-model="form.name"
+          data-test="form-name"
+          maxlength="200"
+          class="border-hairline rounded-lg border px-3 py-2"
+        />
+      </label>
+
+      <label class="flex flex-col gap-1">
+        <span class="text-ink-2 text-sm">說明</span>
+        <textarea
+          v-model="form.description"
+          rows="2"
+          class="border-hairline rounded-lg border px-3 py-2"
+        ></textarea>
+      </label>
+    </Card>
+
+    <p v-if="serverError" data-test="form-error" class="text-expense text-sm">{{ serverError }}</p>
+
+    <button
+      type="submit"
+      data-test="form-submit"
+      class="bg-brand-fill rounded-lg py-2.5 font-medium text-white"
+    >
+      儲存
+    </button>
+
+    <!-- 刪除（僅編輯）：原生 <dialog> 二次確認 -->
+    <button
+      v-if="isEdit"
+      type="button"
+      data-test="open-delete"
+      class="text-expense py-1 text-sm"
+      @click="deleteDialog?.showModal?.()"
+    >
+      刪除這筆交易
+    </button>
+  </form>
+
+  <dialog ref="deleteDialog" class="rounded-card m-auto p-5 backdrop:bg-black/30">
+    <p class="mb-4">確定刪除這筆交易？此動作無法復原。</p>
+    <div class="flex justify-end gap-2">
+      <button type="button" class="text-ink-2 px-3 py-1.5 text-sm" @click="deleteDialog?.close?.()">
+        取消
+      </button>
+      <button
+        type="button"
+        data-test="confirm-delete"
+        class="bg-expense rounded-lg px-3 py-1.5 text-sm text-white"
+        @click="confirmDelete"
+      >
+        刪除
+      </button>
+    </div>
+  </dialog>
+</template>
