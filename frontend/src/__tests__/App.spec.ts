@@ -1,12 +1,16 @@
 import { describe, it, expect } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
+import { createPinia } from 'pinia'
+import { createMemoryHistory, createRouter } from 'vue-router'
 import App from '@/App.vue'
+import { routes } from '@/router'
 
 describe('App', () => {
-  it('renders the app shell', () => {
-    const wrapper = mount(App, {
-      global: { stubs: { RouterView: true } },
-    })
+  it('renders the guest layout on the login page', async () => {
+    const router = createRouter({ history: createMemoryHistory(), routes })
+    await router.push('/login')
+    const wrapper = mount(App, { global: { plugins: [createPinia(), router] } })
+    await flushPromises()
     expect(wrapper.text()).toContain('分類帳')
   })
 })

@@ -9,6 +9,37 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/DashboardView.vue'),
     meta: { requiresAuth: true },
   },
+  // 尚未實作的頁面先以共用佔位立路由，殼的導覽今天就可點；完成一頁換一頁。
+  {
+    path: '/transactions',
+    name: 'transactions',
+    component: () => import('@/views/PlaceholderView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/transactions/new',
+    name: 'transaction-new',
+    component: () => import('@/views/PlaceholderView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/reports',
+    name: 'reports',
+    component: () => import('@/views/PlaceholderView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/settings',
+    name: 'settings',
+    component: () => import('@/views/SettingsView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/settings/:section',
+    name: 'settings-section',
+    component: () => import('@/views/PlaceholderView.vue'),
+    meta: { requiresAuth: true },
+  },
   {
     path: '/login',
     name: 'login',

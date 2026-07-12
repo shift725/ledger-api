@@ -3,8 +3,6 @@
 /*
   「紙上晴空」主題設計 tokens——色票、分類色點色盤、卡片圓角。
   --color-* / --radius-* 落在 Tailwind namespace，被引用時生出 bg-/text-/rounded- utility。
-  注意：Tailwind v4 會 tree-shake 未被引用的 theme 變數。--dot-* 供分類色點機制以
-  var(--dot-N) 取用，但在有實際引用（或改用 @theme static）前不會出現在編譯輸出。
 */
 @theme {
   --font-sans:
@@ -23,6 +21,14 @@
   --color-expense: #c74840;
   --color-track: #eae4d4;
 
+  --radius-card: 16px;
+}
+
+/*
+  色點色盤走 JS 消費（lib/dots.ts 回傳 var(--dot-N) 字串）——Tailwind 看不到這種引用，
+  一般 @theme 會被 tree-shake，必須 static 才常駐輸出到 :root。
+*/
+@theme static {
   --dot-1: #da7a1c;
   --dot-2: #a8860d;
   --dot-3: #7e8f1c;
@@ -33,11 +39,9 @@
   --dot-8: #bc3aa4;
   --dot-9: #8a2560;
   --dot-10: #d62f8c;
-
-  --radius-card: 16px;
 }
 
-/* 排印鐵則：系統字疊（不載中文 webfont）＋全域等寬數字 */
+/* 系統字疊（中文 webfont 動輒數 MB，不載）＋全域等寬數字（金額對齊） */
 @layer base {
   body {
     min-height: 100vh;

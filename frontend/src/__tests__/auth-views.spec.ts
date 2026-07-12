@@ -7,7 +7,7 @@ import { server } from '@/mocks/node'
 import { routes } from '@/router'
 import LoginView from '@/views/LoginView.vue'
 import RegisterView from '@/views/RegisterView.vue'
-import DashboardView from '@/views/DashboardView.vue'
+import SettingsView from '@/views/SettingsView.vue'
 import { useAuthStore } from '@/stores/auth'
 
 // Guard-free router (the guard lives on the app singleton). Memory history has
@@ -97,14 +97,14 @@ describe('RegisterView', () => {
   })
 })
 
-describe('DashboardView', () => {
+describe('SettingsView（登出入口，自佔位總覽移入）', () => {
   it('shows the username and logs out to /login', async () => {
     const store = useAuthStore()
     await store.login('demo@example.com', 'pw')
-    const router = await routerAt('/')
+    const router = await routerAt('/settings')
     const push = vi.spyOn(router, 'push').mockResolvedValue(undefined)
 
-    const wrapper = mount(DashboardView, { global: { plugins: [router] } })
+    const wrapper = mount(SettingsView, { global: { plugins: [router] } })
     expect(wrapper.text()).toContain('demo')
 
     await wrapper.find('button').trigger('click')
