@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { RouterLink } from 'vue-router'
+import { toastMessage } from '@/lib/toast'
 
 // 路由與資料層完全共用，手機/桌面只差版面。
 const mainNav = [
@@ -21,6 +22,15 @@ const activeCls = 'text-brand-text font-medium'
 
 <template>
   <div class="min-h-screen md:pl-56">
+    <!-- 全域提示：置中頂部浮層 -->
+    <div
+      v-if="toastMessage"
+      data-test="toast"
+      class="bg-brand-fill fixed inset-x-0 top-4 z-20 mx-auto w-fit rounded-full px-4 py-2 text-sm text-white shadow-lg"
+    >
+      {{ toastMessage }}
+    </div>
+
     <!-- 桌面：左 sidebar，「更多」子項展開直接可見 -->
     <aside
       data-test="sidebar"
