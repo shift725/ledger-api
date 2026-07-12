@@ -1,0 +1,2 @@
+# openapi-typescript 產生的契約型別（機器輸出，不手動格式化；由 typegen 重生、CI diff 看守）
+src/api/schema.d.ts

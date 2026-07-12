@@ -17,3 +17,20 @@ repos:
       - id: check-yaml
       - id: check-merge-conflict
       - id: check-added-large-files
+  # 前端 lint/format：官方 eslint/prettier pre-commit mirror 已 archived，
+  # 改用 local hooks 直接跑 frontend 自己的工具（單一真實來源＝package.json，
+  # 免在此重複釘版與外掛清單）。scoped ^frontend/，與後端 ruff 對稱、互不干擾。
+  - repo: local
+    hooks:
+      - id: frontend-eslint
+        name: eslint（frontend）
+        language: system
+        entry: npm --prefix frontend run lint:fix
+        files: ^frontend/
+        pass_filenames: false
+      - id: frontend-prettier
+        name: prettier（frontend）
+        language: system
+        entry: npm --prefix frontend run format
+        files: ^frontend/
+        pass_filenames: false

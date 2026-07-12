@@ -1,0 +1,50 @@
+@import 'tailwindcss';
+
+/*
+  「紙上晴空」主題設計 tokens——色票、分類色點色盤、卡片圓角。
+  --color-* / --radius-* 落在 Tailwind namespace，被引用時生出 bg-/text-/rounded- utility。
+  注意：Tailwind v4 會 tree-shake 未被引用的 theme 變數。--dot-* 供分類色點機制以
+  var(--dot-N) 取用，但在有實際引用（或改用 @theme static）前不會出現在編譯輸出。
+*/
+@theme {
+  --font-sans:
+    system-ui, -apple-system, 'PingFang TC', 'Noto Sans TC', 'Microsoft JhengHei', sans-serif;
+
+  --color-bg: #f5f1e8;
+  --color-card: #ffffff;
+  --color-ink: #2b2a26;
+  --color-ink-2: #6b6557;
+  --color-hairline: #f0ebdd;
+  --color-frame: #e3dcc9;
+  --color-brand-fill: #1e96cf;
+  --color-brand-text: #0c7099;
+  --color-brand-tint: #dff1fb;
+  --color-income: #1f8353;
+  --color-expense: #c74840;
+  --color-track: #eae4d4;
+
+  --dot-1: #da7a1c;
+  --dot-2: #a8860d;
+  --dot-3: #7e8f1c;
+  --dot-4: #5e9926;
+  --dot-5: #4757c8;
+  --dot-6: #7c5cd6;
+  --dot-7: #9440c9;
+  --dot-8: #bc3aa4;
+  --dot-9: #8a2560;
+  --dot-10: #d62f8c;
+
+  --radius-card: 16px;
+}
+
+/* 排印鐵則：系統字疊（不載中文 webfont）＋全域等寬數字 */
+@layer base {
+  body {
+    min-height: 100vh;
+    background: var(--color-bg);
+    color: var(--color-ink);
+    font-size: 15px;
+    line-height: 1.45;
+    font-variant-numeric: tabular-nums;
+  }
+}
