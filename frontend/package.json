@@ -10,9 +10,10 @@
     "test:unit": "vitest run",
     "build-only": "vite build",
     "type-check": "vue-tsc --build",
-    "lint": "run-s \"lint:*\"",
+    "lint": "run-s lint:oxlint lint:eslint",
     "lint:oxlint": "oxlint .",
     "lint:eslint": "eslint . --cache",
+    "lint:fix": "oxlint . --fix && eslint . --fix --cache",
     "format": "prettier --write src/",
     "format:check": "prettier --check src/",
     "typegen": "openapi-typescript ../openapi.yaml -o src/api/schema.d.ts"

@@ -59,3 +59,45 @@ jobs:
 
       - name: 覆蓋率門檻（pyproject fail_under=75，低於即 fail）
         run: coverage report
+
+  # 前端 job：與 test 並行，全部在 frontend/ 下跑。
+  # 每支 PR 前後端都跑（不做 path filter——required check 被 skip 會卡 merge）。
+  frontend:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: frontend/.nvmrc          # 與本機 .nvmrc 同一版
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 安裝依賴（npm ci，嚴格照 lockfile）
+        run: npm ci
+
+      - name: Lint（oxlint + eslint）
+        run: npm run lint
+
+      - name: 格式檢查（prettier --check）
+        run: npm run format:check
+
+      - name: 型別檢查（vue-tsc）
+        run: npm run type-check
+
+      - name: 單元測試（vitest run）
+        run: npm run test:unit
+
+      - name: 建置（vite build）
+        run: npm run build
+
+      # 契約看守：重生型別後 git diff 必須乾淨——openapi.yaml 改了卻沒重生型別即 fail。
+      - name: 契約型別未漂移
+        run: |
+          npm run typegen
+          git diff --exit-code src/api/schema.d.ts
