@@ -13,12 +13,18 @@ export const routes: RouteRecordRaw[] = [
   {
     path: '/transactions',
     name: 'transactions',
-    component: () => import('@/views/PlaceholderView.vue'),
+    component: () => import('@/views/TransactionsView.vue'),
     meta: { requiresAuth: true },
   },
   {
     path: '/transactions/new',
     name: 'transaction-new',
+    component: () => import('@/views/PlaceholderView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/transactions/:id',
+    name: 'transaction-detail',
     component: () => import('@/views/PlaceholderView.vue'),
     meta: { requiresAuth: true },
   },

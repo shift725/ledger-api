@@ -79,6 +79,41 @@ export const handlers: RequestHandler[] = [
           },
     )
   }),
+  // ── reference 清單（帳戶/分類/標籤）：id 與交易罐頭對齊 ──
+  http.get('*/api/ledger/accounts/', () =>
+    HttpResponse.json({
+      count: 2,
+      next: null,
+      previous: null,
+      results: [
+        { id: 'acc-1', name: '現金', type: 'cash', balance: '12350.00', is_default: true },
+        { id: 'acc-2', name: '台新銀行', type: 'bank', balance: '236000.00', is_default: false },
+      ],
+    }),
+  ),
+  http.get('*/api/ledger/categories/', () =>
+    HttpResponse.json({
+      count: 3,
+      next: null,
+      previous: null,
+      results: [
+        { id: 'cat-food', name: '餐飲', description: '' },
+        { id: 'cat-home', name: '居住', description: '' },
+        { id: 'cat-salary', name: '薪水', description: '' },
+      ],
+    }),
+  ),
+  http.get('*/api/ledger/tags/', () =>
+    HttpResponse.json({
+      count: 2,
+      next: null,
+      previous: null,
+      results: [
+        { id: 'tag-1', name: '固定支出', description: '' },
+        { id: 'tag-2', name: '訂閱', description: '' },
+      ],
+    }),
+  ),
   http.get('*/api/ledger/transactions/', () =>
     HttpResponse.json({
       count: 4,
