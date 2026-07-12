@@ -1,9 +1,3 @@
-<script setup lang="ts">
-import TheWelcome from '../components/TheWelcome.vue'
-</script>
-
 <template>
-  <main>
-    <TheWelcome />
-  </main>
+  <div class="bg-card rounded-card text-ink-2 p-4">介面骨架已就緒。</div>
 </template>
