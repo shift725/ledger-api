@@ -14,9 +14,11 @@
     "lint:oxlint": "oxlint .",
     "lint:eslint": "eslint . --cache",
     "format": "prettier --write src/",
-    "format:check": "prettier --check src/"
+    "format:check": "prettier --check src/",
+    "typegen": "openapi-typescript ../openapi.yaml -o src/api/schema.d.ts"
   },
   "dependencies": {
+    "openapi-fetch": "^0.17.0",
     "pinia": "^3.0.4",
     "vue": "^3.5.38",
     "vue-router": "^5.1.0"
@@ -37,6 +39,7 @@
     "happy-dom": "^20.10.6",
     "jiti": "^2.7.0",
     "npm-run-all2": "^9.0.2",
+    "openapi-typescript": "^7.13.0",
     "oxlint": "~1.69.0",
     "prettier": "3.8.4",
     "tailwindcss": "^4.3.2",
