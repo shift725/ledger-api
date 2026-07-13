@@ -1,6 +1,7 @@
 import createClient, { type Middleware } from 'openapi-fetch'
 import type { paths } from './schema'
 import { useAuthStore } from '@/stores/auth'
+import { toast } from '@/lib/toast'
 import router from '@/router'
 
 // Typed client for business endpoints (the ones whose schema is accurate). Auth
@@ -28,6 +29,15 @@ const authMiddleware: Middleware = {
   async onResponse({ response, id }) {
     const retry = replayClones.get(id)
     replayClones.delete(id)
+
+    // 429：全域統一提示，讀 Retry-After 給可重試時間（DRF 回整數秒）。只提示、不吞
+    // 回應——呼叫端的錯誤態照舊、避免白屏。
+    if (response.status === 429) {
+      const secs = Number(response.headers.get('Retry-After'))
+      const when = Number.isFinite(secs) && secs > 0 ? `${secs} 秒後` : '稍後'
+      toast(`請求過於頻繁，請${when}再試`)
+      return response
+    }
 
     if (response.status !== 401 || !retry) return response
 

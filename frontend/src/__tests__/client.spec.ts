@@ -5,12 +5,14 @@ import { server } from '@/mocks/node'
 import router from '@/router'
 import { api } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
+import { toastMessage } from '@/lib/toast'
 
 const ACCOUNTS = '*/api/ledger/accounts/'
 
 beforeEach(() => {
   setActivePinia(createPinia())
   localStorage.clear()
+  toastMessage.value = ''
 })
 
 afterEach(() => {
@@ -120,6 +122,38 @@ describe('api client middleware — 401 refresh + replay', () => {
 
     expect(error).toBeUndefined()
     expect(replayedBody).toEqual(body)
+  })
+})
+
+describe('api client middleware — 429 節流提示', () => {
+  it('429 帶 Retry-After → toast 顯示秒數；回應不吞、照常回傳', async () => {
+    server.use(
+      http.get(ACCOUNTS, () =>
+        HttpResponse.json(
+          { detail: 'throttled' },
+          { status: 429, headers: { 'Retry-After': '30' } },
+        ),
+      ),
+    )
+    const store = useAuthStore()
+    await loginWith(store)
+
+    const { response } = await api.GET('/api/ledger/accounts/')
+
+    expect(response.status).toBe(429) // 不吞：呼叫端錯誤態照舊
+    expect(toastMessage.value).toContain('30') // 提示含可重試秒數
+  })
+
+  it('429 無 Retry-After → 通用「稍後」提示', async () => {
+    server.use(
+      http.get(ACCOUNTS, () => HttpResponse.json({ detail: 'throttled' }, { status: 429 })),
+    )
+    const store = useAuthStore()
+    await loginWith(store)
+
+    await api.GET('/api/ledger/accounts/')
+
+    expect(toastMessage.value).toContain('稍後')
   })
 })
 
