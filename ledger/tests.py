@@ -42,7 +42,7 @@ from ledger.models import (
     Transaction,
     next_due,
 )
-from ledger.serializers import TransactionSerializer
+from ledger.serializers import CategorySerializer, TransactionSerializer
 from ledger.tasks import post_due_recurring_rules
 
 
@@ -299,6 +299,40 @@ class TestOwnedResourceCrud:
         assert 'created_at' not in resp.data
         assert 'updated_at' not in resp.data
 
+    def test_duplicate_name_returns_400_not_500(self, url, model, auth_client, user):
+        # (user, name) 唯一約束不含在 serializer fields（user 由 view 設）→ DRF 不自動驗，
+        # 沒有 validate 時會落到 DB 炸 IntegrityError→500。序列化器補檢查回乾淨 400。
+        model.objects.create(user=user, name='重複')
+        resp = auth_client.post(url, {'name': '重複'})
+        assert resp.status_code == 400
+        assert 'name' in resp.data
+
+    def test_rename_to_existing_name_returns_400(self, url, model, auth_client, user):
+        model.objects.create(user=user, name='甲')
+        obj = model.objects.create(user=user, name='乙')
+        resp = auth_client.patch(f'{url}{obj.id}/', {'name': '甲'})
+        assert resp.status_code == 400
+
+    def test_rename_to_own_current_name_ok(self, url, model, auth_client, user):
+        # 排除自己：改成自己現有的名字（等同沒改）不該被誤判成重複
+        obj = model.objects.create(user=user, name='丙')
+        resp = auth_client.patch(f'{url}{obj.id}/', {'name': '丙'})
+        assert resp.status_code == 200
+
+    def test_duplicate_name_allowed_across_users(self, url, model, auth_client, user, other_user):
+        # 唯一性是 per-user：別人叫「共用名」不該擋我也用「共用名」
+        model.objects.create(user=other_user, name='共用名')
+        resp = auth_client.post(url, {'name': '共用名'})
+        assert resp.status_code == 201
+
+
+@pytest.mark.django_db
+def test_unique_name_mixin_without_request_skips_check():
+    # 無 request context（context-less 實例化）→ 重名 guard 跳過、不取 request.user 而炸。
+    # 這道 guard 讓序列化器在沒有 request 的場合仍能安全實例化與驗證。
+    serializer = CategorySerializer(data={'name': '任意名'})
+    assert serializer.is_valid(), serializer.errors
+
 
 # --- 分頁：掛在 OwnedModelViewSet 基底 → 五資源同一條路徑，用最便宜的 Category 驗證 ---
 
@@ -389,6 +423,23 @@ class TestAccountViewSet:
         resp = auth_client.delete(f'{self.URL}{acc.id}/')
         assert resp.status_code == 204
         assert not Account.objects.filter(id=acc.id).exists()
+
+    def test_duplicate_name_returns_400_not_500(self, auth_client, user):
+        Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+        resp = auth_client.post(self.URL, {'name': '現金', 'type': 'bank'})
+        assert resp.status_code == 400  # 撞 (user,name) 唯一約束 → 乾淨 400，非 DB 500
+        assert 'name' in resp.data
+
+    def test_rename_to_existing_name_returns_400(self, auth_client, user):
+        Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+        acc = Account.objects.create(user=user, name='銀行', type=Account.Type.BANK)
+        resp = auth_client.patch(f'{self.URL}{acc.id}/', {'name': '現金'})
+        assert resp.status_code == 400
+
+    def test_rename_to_own_current_name_ok(self, auth_client, user):
+        acc = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+        resp = auth_client.patch(f'{self.URL}{acc.id}/', {'name': '現金'})
+        assert resp.status_code == 200
 
 
 # --- Transaction：可讀關聯 + 關聯 queryset 收斂到本人（資安關鍵）---

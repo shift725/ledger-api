@@ -14,6 +14,16 @@ class UserSerializer(serializers.ModelSerializer):
         fields = ['id', 'username', 'email', 'phone', 'role', 'created_at']
         read_only_fields = ['id', 'created_at']
 
+    def update(self, instance, validated_data):
+        # 防自我提權：只有 staff 能改 role。非 staff 的 PATCH 靜默丟棄 role（語意同
+        # read_only：送了就忽略，不炸 400）。role 不進 read_only_fields——那會讓凍結
+        # 契約的 schema 把 role 標成 readOnly、staff 也不能改。單欄 unique（username/
+        # email）的重名由 DRF ModelSerializer 自動掛的 UniqueValidator 擋成 400。
+        request = self.context.get('request')
+        if not (request and request.user.is_staff):
+            validated_data.pop('role', None)
+        return super().update(instance, validated_data)
+
 
 class UserRegisterSerializer(serializers.ModelSerializer):
     """使用者註冊序列化器"""
