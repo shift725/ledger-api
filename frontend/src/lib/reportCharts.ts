@@ -45,6 +45,22 @@ export function toBalanceHistoryChart(accounts: BalanceHistoryAccount[]): ChartD
   return { labels, datasets }
 }
 
+// 各帳戶目前餘額（月序列末項）＋色點，供走勢圖下方精確數字表。色點與走勢線同源
+// （同一 accounts 順序、確定性 assigner）→ 顏色一致。
+export interface BalanceRow {
+  label: string
+  balance: string
+  color: string
+}
+export function balanceRows(accounts: BalanceHistoryAccount[]): BalanceRow[] {
+  const assign = createDotAssigner()
+  return accounts.map((a) => ({
+    label: a.account_name,
+    balance: a.months.at(-1)?.balance ?? '0.00',
+    color: resolveCssVar(assign(a.account_id)),
+  }))
+}
+
 // 走勢圖選項：y 軸刻度與 tooltip 皆走 formatAmount（tooltip 取繪圖 float，精度邊界同上）。
 export function lineChartOptions(): ChartOptions<'line'> {
   return {
@@ -65,42 +81,63 @@ export function lineChartOptions(): ChartOptions<'line'> {
   }
 }
 
-// 分類環圈：單值 FK，各桶加總＝當月總額，環圈語意成立。依選定收支別（flow）取值；
-// 該別為 0 的分類不進圈（免無形切片汙染圖例）。未分類（category_id=null）著中性灰、
-// 不佔色盤名額。by-category 一發回收支雙值 → 切 flow 純換值、不重抓。
+// 圖與表共用的一列：label＋契約字串金額＋已解析色。圖用 Number(amount) 定位、表用
+// formatAmount(amount) 顯示精確值，顏色同一份 → 圖例與文字表天然對齊、不需各自指色。
+export interface BreakdownRow {
+  label: string
+  amount: string
+  color: string
+}
+
+// 分類：篩掉 flow 為 0 者（免無形切片）；未分類（category_id=null）著中性灰、不佔色盤名額。
+export function categoryRows(breakdown: CategoryBreakdown, flow: Flow): BreakdownRow[] {
+  const assign = createDotAssigner()
+  return breakdown.categories
+    .filter((c) => Number(c[flow]) > 0)
+    .map((c) => ({
+      label: c.category_name ?? '未分類',
+      amount: c[flow],
+      color:
+        c.category_id === null
+          ? resolveCssVar('var(--color-ink-2)')
+          : resolveCssVar(assign(c.category_id)),
+    }))
+}
+
+// 標籤：篩掉 flow 為 0 者；每標籤一色。
+export function tagRows(breakdown: TagBreakdown, flow: Flow): BreakdownRow[] {
+  const assign = createDotAssigner()
+  return breakdown.tags
+    .filter((t) => Number(t[flow]) > 0)
+    .map((t) => ({ label: t.tag_name, amount: t[flow], color: resolveCssVar(assign(t.tag_id)) }))
+}
+
+// 分類環圈：單值 FK，各桶加總＝當月總額，環圈語意成立。by-category 一發回收支雙值 →
+// 切 flow 純換值、不重抓。
 export function toCategoryDoughnut(
   breakdown: CategoryBreakdown,
   flow: Flow,
 ): ChartData<'doughnut'> {
-  const items = breakdown.categories.filter((c) => Number(c[flow]) > 0)
-  const assign = createDotAssigner()
+  const rows = categoryRows(breakdown, flow)
   return {
-    labels: items.map((c) => c.category_name ?? '未分類'),
+    labels: rows.map((r) => r.label),
     datasets: [
-      {
-        data: items.map((c) => Number(c[flow])),
-        backgroundColor: items.map((c) =>
-          c.category_id === null
-            ? resolveCssVar('var(--color-ink-2)')
-            : resolveCssVar(assign(c.category_id)),
-        ),
-      },
+      { data: rows.map((r) => Number(r.amount)), backgroundColor: rows.map((r) => r.color) },
     ],
   }
 }
 
-// 標籤橫條：M2M 可重疊維度，各標籤金額加總可破當月總額 → 禁圓餅（合計 100% 不成立），
-// 用橫向長條（indexAxis:'y'）。其餘同分類：flow 取值、0 值不進、切 flow 不重抓。
+// 標籤橫條：M2M 可重疊維度，各標籤加總可破當月總額 → 禁圓餅（合計 100% 不成立），
+// 用橫向長條（indexAxis:'y'）。
 export function toTagBar(breakdown: TagBreakdown, flow: Flow): ChartData<'bar'> {
-  const items = breakdown.tags.filter((t) => Number(t[flow]) > 0)
-  const assign = createDotAssigner()
+  const rows = tagRows(breakdown, flow)
   return {
-    labels: items.map((t) => t.tag_name),
+    labels: rows.map((r) => r.label),
     datasets: [
       {
         label: flow === 'expense' ? '支出' : '收入',
-        data: items.map((t) => Number(t[flow])),
-        backgroundColor: items.map((t) => resolveCssVar(assign(t.tag_id))),
+        data: rows.map((r) => Number(r.amount)),
+        backgroundColor: rows.map((r) => r.color),
       },
     ],
   }

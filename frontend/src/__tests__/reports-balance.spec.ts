@@ -45,6 +45,8 @@ describe('報表 balance-history 節制取用', () => {
 
     const { wrapper } = await mountReports('/reports') // 預設 balance tab
     expect(counter.n).toBe(1) // 進頁一發
+    expect(wrapper.text()).toContain('各帳戶目前餘額') // 精確表渲染
+    expect(wrapper.text()).toContain('100.00') // A 帳戶餘額（契約字串）
 
     await clickTab(wrapper, '標籤')
     expect(counter.n).toBe(1) // 切走不抓

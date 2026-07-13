@@ -4,6 +4,9 @@ import {
   toBalanceHistoryChart,
   toCategoryDoughnut,
   toTagBar,
+  balanceRows,
+  categoryRows,
+  tagRows,
 } from '@/lib/reportCharts'
 
 describe('resolveCssVar', () => {
@@ -99,5 +102,54 @@ describe('toTagBar', () => {
 
   it('收入別全 0 → 空（供空態判斷）', () => {
     expect(toTagBar(breakdown, 'income').labels).toEqual([])
+  })
+})
+
+describe('文字表 row 函數（精確金額用契約字串）', () => {
+  it('balanceRows：取月序列末項為目前餘額；無月份 → 0.00', () => {
+    const rows = balanceRows([
+      {
+        account_id: 'a',
+        account_name: '現金',
+        months: [
+          { month: '2026-05', balance: '100.00' },
+          { month: '2026-07', balance: '250.00' },
+        ],
+      },
+      { account_id: 'b', account_name: '台新', months: [] },
+    ])
+    expect(rows[0]).toMatchObject({ label: '現金', balance: '250.00' })
+    expect(rows[1]).toMatchObject({ label: '台新', balance: '0.00' })
+  })
+
+  it('categoryRows：篩 flow>0、未分類命名+灰，金額保留契約字串（非 Number）', () => {
+    const rows = categoryRows(
+      {
+        year: 2026,
+        month: 7,
+        categories: [
+          { category_id: 'c1', category_name: '餐飲', income: '0.00', expense: '800.50' },
+          { category_id: 'c2', category_name: '薪水', income: '5000.00', expense: '0.00' },
+          { category_id: null, category_name: null, income: '0.00', expense: '50.00' },
+        ],
+      },
+      'expense',
+    )
+    expect(rows.map((r) => r.label)).toEqual(['餐飲', '未分類'])
+    expect(rows[0]!.amount).toBe('800.50') // 精確字串保留，不轉 Number
+    expect(rows[1]!.color).toBe('var(--color-ink-2)')
+  })
+
+  it('tagRows：篩 flow>0，金額保留契約字串', () => {
+    const rows = tagRows(
+      {
+        year: 2026,
+        month: 7,
+        tags: [{ tag_id: 't1', tag_name: '固定', income: '0.00', expense: '2000.00' }],
+      },
+      'expense',
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.amount).toBe('2000.00')
   })
 })

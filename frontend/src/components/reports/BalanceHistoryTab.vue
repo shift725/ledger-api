@@ -2,9 +2,12 @@
 import { ref, computed, onMounted } from 'vue'
 import { api } from '@/api/client'
 import type { components } from '@/api/schema'
-import { toBalanceHistoryChart, lineChartOptions } from '@/lib/reportCharts'
+import { toBalanceHistoryChart, lineChartOptions, balanceRows } from '@/lib/reportCharts'
 import ChartCanvas from './ChartCanvas.vue'
 import Card from '@/components/ui/UiCard.vue'
+import Row from '@/components/ui/UiRow.vue'
+import Dot from '@/components/ui/UiDot.vue'
+import Amount from '@/components/ui/UiAmount.vue'
 
 type BalanceHistoryAccount = components['schemas']['BalanceHistoryAccount']
 
@@ -32,6 +35,7 @@ async function load() {
 onMounted(load)
 
 const chartData = computed(() => toBalanceHistoryChart(accounts.value ?? []))
+const rows = computed(() => balanceRows(accounts.value ?? []))
 const isEmpty = computed(() => (chartData.value.labels?.length ?? 0) === 0)
 const options = lineChartOptions()
 </script>
@@ -52,8 +56,18 @@ const options = lineChartOptions()
     <p v-if="error" class="text-ink-2 py-6 text-center">載入失敗</p>
     <p v-else-if="loading && !accounts" class="text-ink-2 py-6 text-center">載入中…</p>
     <p v-else-if="isEmpty" class="text-ink-2 py-6 text-center">尚無餘額資料</p>
-    <div v-else class="h-64">
-      <ChartCanvas type="line" :data="chartData" :options="options" />
-    </div>
+    <template v-else>
+      <div class="h-64">
+        <ChartCanvas type="line" :data="chartData" :options="options" />
+      </div>
+      <!-- 精確數字表：圖為概略，表給契約字串的精確餘額（各帳戶目前值） -->
+      <div class="border-hairline mt-3 border-t pt-2">
+        <p class="text-ink-2 mb-1 text-sm">各帳戶目前餘額</p>
+        <Row v-for="r in rows" :key="r.label" class="py-1">
+          <span class="flex items-center gap-1.5"><Dot :color="r.color" />{{ r.label }}</span>
+          <Amount :value="r.balance" />
+        </Row>
+      </div>
+    </template>
   </Card>
 </template>
