@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import BalanceHistoryTab from '@/components/reports/BalanceHistoryTab.vue'
+import CategoryTab from '@/components/reports/CategoryTab.vue'
+import TagsTab from '@/components/reports/TagsTab.vue'
+import RangeTab from '@/components/reports/RangeTab.vue'
 
 const TABS = [
   { key: 'balance', label: '餘額走勢' },
@@ -49,8 +53,12 @@ function selectTab(key: TabKey) {
     </button>
   </nav>
 
-  <!-- 各 tab 內容陸續接入；先留佔位以立骨架。 -->
-  <section :data-test="`pane-${activeTab}`" class="text-ink-2 py-6 text-center">
-    {{ TABS.find((t) => t.key === activeTab)?.label }}
-  </section>
+  <!-- KeepAlive 保活已抓過的 tab：切走 deactivate、切回 activate 不重掛＝不重抓
+       （尤其 balance-history 貴）；range 保活則保住已填的起迄日。 -->
+  <KeepAlive>
+    <BalanceHistoryTab v-if="activeTab === 'balance'" />
+    <CategoryTab v-else-if="activeTab === 'category'" />
+    <TagsTab v-else-if="activeTab === 'tags'" />
+    <RangeTab v-else-if="activeTab === 'range'" />
+  </KeepAlive>
 </template>

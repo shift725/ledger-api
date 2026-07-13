@@ -12,7 +12,9 @@ async function mountReports(location: string): Promise<{ wrapper: VueWrapper; ro
   useAuthStore().access = 'token'
   const router = createRouter({ history: createMemoryHistory(), routes })
   await router.push(location)
-  const wrapper = mount(ReportsView, { global: { plugins: [pinia, router] } })
+  const wrapper = mount(ReportsView, {
+    global: { plugins: [pinia, router], stubs: { ChartCanvas: true } },
+  })
   await flushPromises()
   return { wrapper, router }
 }
