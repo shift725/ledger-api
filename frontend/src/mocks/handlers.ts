@@ -79,6 +79,52 @@ export const handlers: RequestHandler[] = [
           },
     )
   }),
+  // 每帳戶逐月餘額（起月不同→前端聯集軸＋前導 null）
+  http.get('*/api/ledger/reports/balance-history/', () =>
+    HttpResponse.json([
+      {
+        account_id: 'acc-1',
+        account_name: '現金',
+        months: [
+          { month: '2026-05', balance: '5000.00' },
+          { month: '2026-06', balance: '8000.00' },
+          { month: '2026-07', balance: '12350.00' },
+        ],
+      },
+      {
+        account_id: 'acc-2',
+        account_name: '台新銀行',
+        months: [
+          { month: '2026-06', balance: '200000.00' },
+          { month: '2026-07', balance: '236000.00' },
+        ],
+      },
+    ]),
+  ),
+  // 分類收支（單值 FK，含未分類 null 桶）；收支雙值供前端切換
+  http.get('*/api/ledger/reports/summary/by-category/', () =>
+    HttpResponse.json({
+      year: 2026,
+      month: 7,
+      categories: [
+        { category_id: 'cat-food', category_name: '餐飲', income: '0.00', expense: '8200.00' },
+        { category_id: 'cat-home', category_name: '居住', income: '0.00', expense: '15000.00' },
+        { category_id: 'cat-salary', category_name: '薪水', income: '52000.00', expense: '0.00' },
+        { category_id: null, category_name: null, income: '0.00', expense: '340.00' },
+      ],
+    }),
+  ),
+  // 標籤收支（M2M 可重疊）；收支雙值供前端切換
+  http.get('*/api/ledger/reports/summary/by-tag/', () =>
+    HttpResponse.json({
+      year: 2026,
+      month: 7,
+      tags: [
+        { tag_id: 'tag-1', tag_name: '固定支出', income: '0.00', expense: '23000.00' },
+        { tag_id: 'tag-2', tag_name: '訂閱', income: '0.00', expense: '460.00' },
+      ],
+    }),
+  ),
   // ── reference 清單（帳戶/分類/標籤）：id 與交易罐頭對齊 ──
   http.get('*/api/ledger/accounts/', () =>
     HttpResponse.json({
