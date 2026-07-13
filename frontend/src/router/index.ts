@@ -31,7 +31,7 @@ export const routes: RouteRecordRaw[] = [
   {
     path: '/reports',
     name: 'reports',
-    component: () => import('@/views/PlaceholderView.vue'),
+    component: () => import('@/views/ReportsView.vue'),
     meta: { requiresAuth: true },
   },
   {
