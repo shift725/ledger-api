@@ -230,10 +230,14 @@ class UserDetailAPITests(APITestCase):
         self.member = User.objects.create_user(
             username='mem', email='mem@example.com', password='pass12345', role='member'
         )
+        self.other_member = User.objects.create_user(
+            username='mem2', email='mem2@example.com', password='pass12345', role='member'
+        )
         self.admin = User.objects.create_superuser(
             username='admin', email='admin@example.com', password='pass12345'
         )
         self.url = reverse('auth:user_detail', kwargs={'pk': self.member.pk})
+        self.other_url = reverse('auth:user_detail', kwargs={'pk': self.other_member.pk})
 
     def test_detail_get_requires_authentication(self):
         response = self.client.get(self.url)
@@ -245,14 +249,52 @@ class UserDetailAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['email'], 'mem@example.com')
 
-    def test_detail_patch_forbidden_for_non_admin(self):
+    def test_member_can_patch_own_profile(self):
+        # 本人可改自己的個人資料（PATCH 自己的 users/{id}）。
         self.client.force_authenticate(user=self.member)
         response = self.client.patch(self.url, {'phone': '0900000000'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.phone, '0900000000')
+
+    def test_member_cannot_patch_others_profile(self):
+        # 改別人的個人資料 → 403（物件級權限，非本人非 staff）。
+        self.client.force_authenticate(user=self.member)
+        response = self.client.patch(self.other_url, {'phone': '0900000000'}, format='json')
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
-    def test_detail_patch_allowed_for_admin(self):
+    def test_member_cannot_escalate_own_role(self):
+        # 防自我提權：本人 PATCH 帶 role 被靜默忽略（語意同 read_only 欄位），非炸 400。
+        self.client.force_authenticate(user=self.member)
+        response = self.client.patch(self.url, {'role': 'admin'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.role, 'member')
+
+    def test_staff_can_patch_others_profile_and_role(self):
+        # staff（is_staff）維持既有能力：改他人、可設 role。回歸看守。
         self.client.force_authenticate(user=self.admin)
-        response = self.client.patch(self.url, {'phone': '0911222333'}, format='json')
+        response = self.client.patch(
+            self.url, {'phone': '0911222333', 'role': 'staff'}, format='json'
+        )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.member.refresh_from_db()
         self.assertEqual(self.member.phone, '0911222333')
+        self.assertEqual(self.member.role, 'staff')
+
+    def test_member_patch_duplicate_username_returns_400(self):
+        # 開放本人 PATCH 後，username（單欄 unique）撞名須乾淨 400，不落 DB 500。
+        self.client.force_authenticate(user=self.member)
+        response = self.client.patch(self.url, {'username': 'mem2'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_member_patch_duplicate_email_returns_400(self):
+        self.client.force_authenticate(user=self.member)
+        response = self.client.patch(self.url, {'email': 'mem2@example.com'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_member_patch_own_unchanged_username_ok(self):
+        # 改成自己原本的 username（等同沒改）不該被唯一性誤殺。
+        self.client.force_authenticate(user=self.member)
+        response = self.client.patch(self.url, {'username': 'mem'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)

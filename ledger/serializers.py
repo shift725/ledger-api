@@ -4,7 +4,27 @@ from rest_framework import serializers
 from .models import Account, Category, RecurringRule, SavingsGoal, Tag, Transaction, next_due
 
 
-class AccountSerializer(serializers.ModelSerializer):
+# (user, name) 唯一約束的乾淨 400。三資源（Account/Category/Tag）都有
+# UniqueConstraint(user, name)，但 user 不在 serializer fields（由 view 的 perform_create
+# 設定）→ DRF 不自動掛 UniqueTogetherValidator，重名落到 DB 炸 IntegrityError→500。這裡先回
+# 400，DB 約束仍是最後防線（並發競態）。同 SavingsGoalSerializer.validate 判準。
+# 用註解不用 docstring：子類自身無 docstring 時 __doc__ 會沿 MRO 取到本 mixin 的，
+# drf-spectacular 會把它當 component description → 汙染凍結契約（實測踩過）。
+class UniqueNamePerUserMixin:
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        request = self.context.get('request')
+        name = attrs.get('name', getattr(self.instance, 'name', None))
+        if request is not None and name is not None:
+            dup = self.Meta.model.objects.filter(user=request.user, name=name)
+            if self.instance is not None:  # 編輯：排除自己，改成原名不算重複
+                dup = dup.exclude(pk=self.instance.pk)
+            if dup.exists():
+                raise serializers.ValidationError({'name': '此名稱已使用'})
+        return attrs
+
+
+class AccountSerializer(UniqueNamePerUserMixin, serializers.ModelSerializer):
     # balance 唯讀：衍生快取，由交易維護、不接受 client 直接寫入。
     class Meta:
         model = Account
@@ -12,7 +32,7 @@ class AccountSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'balance']
 
 
-class CategorySerializer(serializers.ModelSerializer):
+class CategorySerializer(UniqueNamePerUserMixin, serializers.ModelSerializer):
     # user 不在 fields：擁有者由 view 的 perform_create 設定，不信任 client。
     # created_at/updated_at 不列出：系統時戳，不對外顯示、也不可改。
     class Meta:
@@ -21,7 +41,7 @@ class CategorySerializer(serializers.ModelSerializer):
         read_only_fields = ['id']
 
 
-class TagSerializer(serializers.ModelSerializer):
+class TagSerializer(UniqueNamePerUserMixin, serializers.ModelSerializer):
     class Meta:
         model = Tag
         fields = ['id', 'name', 'description']

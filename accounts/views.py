@@ -1,6 +1,6 @@
 from django.db import IntegrityError
 from rest_framework import generics, status
-from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
+from rest_framework.permissions import AllowAny, BasePermission, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
@@ -56,15 +56,29 @@ class UserListView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
 
 
+class IsSelfOrStaff(BasePermission):
+    """物件級：本人或 staff 可寫個人資料。has_permission 只擋未登入；歸屬判斷在
+    has_object_permission（RetrieveUpdate 的 get_object 會觸發 check_object_permissions）。
+    非本人非 staff → 403（不是 404：此端點的存在性本就對所有登入者公開，GET 不藏）。
+    """
+
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated)
+
+    def has_object_permission(self, request, view, obj):
+        return request.user.is_staff or obj == request.user
+
+
 class UserDetailView(generics.RetrieveUpdateAPIView):
     queryset = CustomUser.objects.all()
     serializer_class = UserSerializer
     http_method_names = ['get', 'patch']  # 只開放 GET/PATCH
 
     def get_permissions(self):
+        # GET 對任何登入者開放（維持既有）；PATCH 收斂到本人或 staff。
         if self.request.method == 'GET':
             return [IsAuthenticated()]
-        return [IsAdminUser()]
+        return [IsSelfOrStaff()]
 
 
 class CustomTokenObtainPairView(TokenObtainPairView):
