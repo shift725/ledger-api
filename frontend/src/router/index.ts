@@ -43,7 +43,7 @@ export const routes: RouteRecordRaw[] = [
   {
     path: '/settings/:section',
     name: 'settings-section',
-    component: () => import('@/views/PlaceholderView.vue'),
+    component: () => import('@/views/SettingsSectionView.vue'),
     meta: { requiresAuth: true },
   },
   {

@@ -6,6 +6,7 @@ import type { components } from '@/api/schema'
 import { useReferenceStore } from '@/stores/reference'
 import { toDatetimeLocal } from '@/lib/format'
 import { toast } from '@/lib/toast'
+import { messagesFrom } from '@/lib/errors'
 import Card from '@/components/ui/UiCard.vue'
 
 type Transaction = components['schemas']['Transaction']
@@ -55,17 +56,6 @@ function toggleTag(id: string) {
   const i = form.tags.indexOf(id)
   if (i === -1) form.tags.push(id)
   else form.tags.splice(i, 1)
-}
-
-// 後端 400 逐欄訊息攤平如實顯示（DRF 回 {欄位:[訊息]} 或 {detail:訊息}）。
-function messagesFrom(err: unknown): string {
-  if (!err || typeof err !== 'object') return '儲存失敗，請稍後再試'
-  const parts: string[] = []
-  for (const v of Object.values(err as Record<string, unknown>)) {
-    if (Array.isArray(v)) parts.push(...v.map(String))
-    else if (typeof v === 'string') parts.push(v)
-  }
-  return parts.join('；') || '儲存失敗，請稍後再試'
 }
 
 async function submit() {
