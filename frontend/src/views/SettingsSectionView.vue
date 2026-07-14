@@ -1,12 +1,17 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, type Component } from 'vue'
 import { useRoute } from 'vue-router'
 import { SETTINGS_SECTIONS } from '@/lib/settingsSections'
+import AccountsSection from '@/components/settings/AccountsSection.vue'
 
-// /settings/:section 的派發殼：驗 slug、掛標題；各資源的真內容之後在對應區塊
-// 元件實作，此處只認得合法的六個 slug。未知 slug → 找不到此頁。
+// /settings/:section 的派發殼：驗 slug、掛標題、依 slug 掛對應區塊元件。
+// 尚未實作的 slug 落佔位；未知 slug → 找不到此頁。
+const sectionComponents: Record<string, Component> = {
+  accounts: AccountsSection,
+}
 const route = useRoute()
 const section = computed(() => SETTINGS_SECTIONS.find((s) => s.slug === route.params.section))
+const body = computed(() => (section.value ? sectionComponents[section.value.slug] : undefined))
 </script>
 
 <template>
@@ -14,7 +19,9 @@ const section = computed(() => SETTINGS_SECTIONS.find((s) => s.slug === route.pa
     <header class="mb-3.5">
       <h1 class="text-xl font-medium">{{ section.label }}</h1>
     </header>
+    <component :is="body" v-if="body" />
     <section
+      v-else
       :data-test="`section-${section.slug}`"
       class="bg-card rounded-card px-4 py-6 text-center"
     >

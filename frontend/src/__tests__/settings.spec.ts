@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { routes } from '@/router'
@@ -30,14 +30,15 @@ describe('SettingsView 清單', () => {
 })
 
 describe('SettingsSectionView 派發', () => {
+  // 派發契約＝合法 slug 掛出對應標題；區塊本體（真元件或佔位）各自於資源 spec 驗。
   it.each(SETTINGS_SECTIONS.map((s) => [s.slug, s.label]))(
     '合法 section「%s」顯示標題「%s」',
     async (slug, label) => {
       const router = freshRouter()
       await router.push(`/settings/${slug}`)
       const wrapper = mount(SettingsSectionView, { global: { plugins: [router] } })
+      await flushPromises()
       expect(wrapper.text()).toContain(label)
-      expect(wrapper.find(`[data-test="section-${slug}"]`).exists()).toBe(true)
     },
   )
 

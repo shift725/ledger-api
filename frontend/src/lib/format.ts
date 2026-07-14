@@ -9,6 +9,17 @@ export function formatAmount(value: string): string {
   return (negative ? '-' : '') + grouped + (frac !== undefined ? `.${frac}` : '')
 }
 
+// 帳戶類型 enum → 顯示標籤（契約 AccountTypeEnum 的四值）。
+const ACCOUNT_TYPE_LABELS: Record<string, string> = {
+  cash: '現金',
+  bank: '銀行',
+  credit_card: '信用卡',
+  e_wallet: '電子錢包',
+}
+export function accountTypeLabel(type: string): string {
+  return ACCOUNT_TYPE_LABELS[type] ?? type
+}
+
 // Date → <input type="datetime-local"> 值（YYYY-MM-DDTHH:mm，當地時間、無秒無時區）。
 export function toDatetimeLocal(d: Date): string {
   const p = (n: number) => String(n).padStart(2, '0')
