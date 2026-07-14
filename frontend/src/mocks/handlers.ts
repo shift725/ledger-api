@@ -160,9 +160,12 @@ export const handlers: RequestHandler[] = [
       ],
     }),
   ),
-  // 定期定額清單預設空（各 spec 以 server.use 覆寫）；設定面派發測試會掛載
-  // RulesSection，缺此 handler 會產生未處理請求、洩漏成其他檔的偽失敗。
+  // 定期定額／儲蓄目標清單預設空（各 spec 以 server.use 覆寫）；設定面派發測試會掛載
+  // Rules/Goals section，缺此 handler 會產生未處理請求、洩漏成其他檔的偽失敗。
   http.get('*/api/ledger/recurring-rules/', () =>
+    HttpResponse.json({ count: 0, next: null, previous: null, results: [] }),
+  ),
+  http.get('*/api/ledger/savings-goals/', () =>
     HttpResponse.json({ count: 0, next: null, previous: null, results: [] }),
   ),
   http.get('*/api/ledger/transactions/', () =>
