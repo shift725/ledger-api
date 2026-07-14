@@ -36,7 +36,7 @@ describe('CategoryTab — 換月重抓、切收支不抓', () => {
     const wrapper = await mountCategory()
     expect(counter.n).toBe(1) // 進頁一發
     expect(wrapper.text()).toContain('餐飲') // 精確表渲染分類名
-    expect(wrapper.text()).toContain('800.00') // 與金額（契約字串）
+    expect(wrapper.text()).toContain('800') // 與金額（formatAmount 後、全零小數部省略）
 
     const incomeBtn = wrapper.findAll('button').find((b) => b.text() === '收入')
     await incomeBtn!.trigger('click')

@@ -6,7 +6,9 @@ export function formatAmount(value: string): string {
   const negative = head.startsWith('-')
   const digits = negative ? head.slice(1) : head
   const grouped = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
-  return (negative ? '-' : '') + grouped + (frac !== undefined ? `.${frac}` : '')
+  // 全零小數部省略（後端 decimal 固定送兩位）：整數金額為大宗，.00 是視覺噪音。
+  const showFrac = frac !== undefined && !/^0+$/.test(frac)
+  return (negative ? '-' : '') + grouped + (showFrac ? `.${frac}` : '')
 }
 
 // 帳戶類型 enum → 顯示標籤（契約 AccountTypeEnum 的四值）。

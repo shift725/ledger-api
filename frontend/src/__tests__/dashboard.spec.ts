@@ -26,17 +26,20 @@ beforeEach(() => {
 describe('DashboardView 五區塊', () => {
   it('五區塊罐頭資料上屏', async () => {
     const wrapper = await mountDashboard()
-    await vi.waitFor(() => expect(wrapper.text()).toContain('52,000.00'))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('52,000'))
 
-    // ① 本月摘要（淨額正值帶 +）
-    expect(wrapper.text()).toContain('31,240.00')
-    expect(wrapper.text()).toContain('+20,760.00')
+    // ① 本月摘要（標籤寫明範圍，與②「今日」對稱；淨額正值帶 +；全零小數部省略）
+    expect(wrapper.text()).toContain('本月收入')
+    expect(wrapper.text()).toContain('本月支出')
+    expect(wrapper.text()).toContain('31,240')
+    expect(wrapper.text()).toContain('本月淨額')
+    expect(wrapper.text()).toContain('+20,760')
     // ② 今日
     expect(wrapper.text()).toContain('今日支出')
-    expect(wrapper.text()).toContain('340.00')
+    expect(wrapper.text()).toContain('340')
     // ③ 帳戶餘額
     expect(wrapper.text()).toContain('總資產')
-    expect(wrapper.text()).toContain('248,350.00')
+    expect(wrapper.text()).toContain('248,350')
     expect(wrapper.text()).toContain('現金')
     expect(wrapper.text()).toContain('台新銀行')
     // ④ 儲蓄目標（13600/20000=68%、98400/240000=41%）
@@ -55,7 +58,7 @@ describe('DashboardView 五區塊', () => {
     const wrapper = await mountDashboard()
     await vi.waitFor(() => expect(wrapper.find('[data-test="today-income"]').exists()).toBe(true))
     const amount = wrapper.find('[data-test="today-income"]')
-    expect(amount.text()).toBe('0.00')
+    expect(amount.text()).toBe('0')
     expect(amount.classes()).toContain('text-ink-2')
     expect(amount.classes()).not.toContain('text-income')
   })
@@ -92,7 +95,7 @@ describe('DashboardView 五區塊', () => {
       expect(wrapper.find('[data-test="block-summary"]').text()).toContain('載入失敗'),
     )
     await vi.waitFor(() =>
-      expect(wrapper.find('[data-test="block-balance"]').text()).toContain('248,350.00'),
+      expect(wrapper.find('[data-test="block-balance"]').text()).toContain('248,350'),
     )
     expect(wrapper.find('[data-test="block-recent"]').text()).toContain('午餐')
   })

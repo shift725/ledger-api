@@ -28,7 +28,7 @@ describe('AccountsSection — 列表', () => {
     expect(wrapper.findAll('[data-test="account-row"]')).toHaveLength(2)
     expect(wrapper.text()).toContain('現金')
     expect(wrapper.text()).toContain('銀行')
-    expect(wrapper.text()).toContain('12,350.00') // 餘額千分位（唯讀顯示）
+    expect(wrapper.text()).toContain('12,350') // 餘額千分位（唯讀顯示；全零小數部省略）
     expect(wrapper.findAll('[data-test="account-default-badge"]')).toHaveLength(1)
   })
 })

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
@@ -52,6 +52,31 @@ describe('AppShell 導覽', () => {
     for (const target of targets) {
       expect(hrefs, `缺 ${target}`).toContain(target)
     }
+  })
+
+  it('FAB 圖示為 SVG（文字「+」置中吃字型 metrics，會偏移）', async () => {
+    const router = freshRouter()
+    await router.push('/')
+    const wrapper = mount(AppShell, { global: { plugins: [pinia, router] } })
+    const fabs = wrapper.findAll('a[aria-label="記一筆"]')
+    expect(fabs).toHaveLength(2) // 桌面右上＋手機 tabbar 中央
+    for (const fab of fabs) {
+      expect(fab.find('svg').exists()).toBe(true)
+      expect(fab.text().trim()).toBe('')
+    }
+  })
+
+  it('sidebar 登出鈕：清 session 並導 /login', async () => {
+    const auth = useAuthStore()
+    auth.access = 'token'
+    const router = freshRouter()
+    await router.push('/')
+    const wrapper = mount(AppShell, { global: { plugins: [pinia, router] } })
+    await wrapper.find('[data-test="sidebar-logout"]').trigger('click')
+    await flushPromises()
+    expect(auth.access).toBeNull()
+    // /login 是 lazy route：等動態載入完成，單一 flushPromises 不夠。
+    await vi.waitFor(() => expect(router.currentRoute.value.path).toBe('/login'))
   })
 })
 

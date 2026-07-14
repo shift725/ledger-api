@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 import { toastMessage } from '@/lib/toast'
 import { SETTINGS_SECTIONS } from '@/lib/settingsSections'
+import { useAuthStore } from '@/stores/auth'
 
 // 路由與資料層完全共用，手機/桌面只差版面。
 const mainNav = [
@@ -16,6 +17,14 @@ const settingsChildren = SETTINGS_SECTIONS.map((s) => ({
 }))
 
 const activeCls = 'text-brand-text font-medium'
+
+// 桌面 sidebar 攤平「更多」子項後，登出需要自己的入口（手機走 /settings 頁）。
+const router = useRouter()
+const auth = useAuthStore()
+async function onLogout() {
+  await auth.logout()
+  router.push('/login')
+}
 </script>
 
 <template>
@@ -54,15 +63,33 @@ const activeCls = 'text-brand-text font-medium'
       >
         {{ item.label }}
       </RouterLink>
+      <button
+        type="button"
+        data-test="sidebar-logout"
+        class="text-ink mt-auto rounded-md px-2 py-1.5 text-left"
+        @click="onLogout"
+      >
+        登出
+      </button>
     </aside>
 
-    <!-- 桌面：右上常駐「+」 -->
+    <!-- 桌面：右上常駐「+」（SVG：文字字元的置中吃字型 metrics，會偏移） -->
     <RouterLink
       to="/transactions/new"
       aria-label="記一筆"
-      class="bg-brand-fill fixed top-5 right-6 z-10 hidden h-11 w-11 items-center justify-center rounded-full text-2xl text-white md:flex"
+      class="bg-brand-fill fixed top-5 right-6 z-10 hidden h-11 w-11 items-center justify-center rounded-full text-white md:flex"
     >
-      +
+      <svg
+        viewBox="0 0 24 24"
+        class="h-6 w-6"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        aria-hidden="true"
+      >
+        <path d="M12 5v14M5 12h14" />
+      </svg>
     </RouterLink>
 
     <main class="mx-auto max-w-md px-4 pt-5 pb-28 md:max-w-2xl md:pt-8 md:pb-8">
@@ -74,9 +101,19 @@ const activeCls = 'text-brand-text font-medium'
       <RouterLink
         to="/transactions/new"
         aria-label="記一筆"
-        class="bg-brand-fill absolute -top-6 left-1/2 z-10 flex h-12 w-12 -translate-x-1/2 items-center justify-center rounded-full text-2xl text-white"
+        class="bg-brand-fill absolute -top-6 left-1/2 z-10 flex h-12 w-12 -translate-x-1/2 items-center justify-center rounded-full text-white"
       >
-        +
+        <svg
+          viewBox="0 0 24 24"
+          class="h-6 w-6"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          aria-hidden="true"
+        >
+          <path d="M12 5v14M5 12h14" />
+        </svg>
       </RouterLink>
       <div class="bg-card rounded-t-card text-ink-2 flex justify-around pt-3 pb-3 text-xs">
         <RouterLink to="/" :exact-active-class="activeCls">總覽</RouterLink>

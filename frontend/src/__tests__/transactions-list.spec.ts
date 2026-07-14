@@ -177,7 +177,7 @@ describe('TransactionsView — 列項顯示', () => {
     expect(wrapper.text()).toContain('薪水') // name 空 → category_name
     expect(wrapper.text()).toContain('未命名') // name 與 category_name 皆空
     expect(wrapper.text()).toContain('自動') // source_rule 非 null → 徽章
-    expect(wrapper.text()).toContain('52,000.00')
+    expect(wrapper.text()).toContain('52,000')
     expect(counter.n).toBe(1) // 進頁恰一發
   })
 

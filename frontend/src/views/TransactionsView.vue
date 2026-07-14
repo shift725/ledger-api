@@ -95,17 +95,41 @@ function apply() {
 watch(
   () => route.query,
   (q) => {
-    Object.assign(filters, parseQuery(q))
+    const parsed = parseQuery(q)
+    // 兩組標籤參數並存（UI 不會產生、只可能手改 URL）：正規化為聯集任一。
+    // 面板是標籤選取的唯一顯示點，不容許存在面板看不見的生效條件。
+    if (parsed.tagsAny.length && parsed.tagsAll.length) {
+      parsed.tagsAny = [...new Set([...parsed.tagsAny, ...parsed.tagsAll])]
+      parsed.tagsAll = []
+      Object.assign(filters, parsed)
+      router.replace({ query: toQuery(filters) }) // 觸發下一輪 watcher 才載入
+      return
+    }
+    Object.assign(filters, parsed)
     load(1)
   },
   { immediate: true },
 )
 
-function toggleTag(kind: 'tagsAny' | 'tagsAll', id: string) {
-  const arr = filters[kind]
+// 標籤 filter chips：選取集依 mode 住在 tagsAny 或 tagsAll 其一（另一組恆空）。
+const tagMode = computed<'any' | 'all'>(() => (filters.tagsAll.length ? 'all' : 'any'))
+const selectedTags = computed(() => (tagMode.value === 'all' ? filters.tagsAll : filters.tagsAny))
+const isTagOn = (id: string) => selectedTags.value.includes(id)
+
+function toggleTag(id: string) {
+  const arr = selectedTags.value
   const i = arr.indexOf(id)
   if (i === -1) arr.push(id)
   else arr.splice(i, 1)
+  apply()
+}
+
+function setTagMode(m: 'any' | 'all') {
+  if (m === tagMode.value) return
+  const [from, to] =
+    m === 'all' ? [filters.tagsAny, filters.tagsAll] : [filters.tagsAll, filters.tagsAny]
+  to.push(...from.filter((id) => !to.includes(id)))
+  from.length = 0
   apply()
 }
 
@@ -144,16 +168,7 @@ const chips = computed(() => {
     c.push({ label: `從 ${filters.dateFrom}`, clear: clr(() => (filters.dateFrom = '')) })
   if (filters.dateTo)
     c.push({ label: `到 ${filters.dateTo}`, clear: clr(() => (filters.dateTo = '')) })
-  for (const id of filters.tagsAny)
-    c.push({
-      label: `標籤(任一)：${nameOf(reference.tags, id)}`,
-      clear: () => toggleTag('tagsAny', id),
-    })
-  for (const id of filters.tagsAll)
-    c.push({
-      label: `標籤(全部)：${nameOf(reference.tags, id)}`,
-      clear: () => toggleTag('tagsAll', id),
-    })
+  // 標籤不進生效條件 chips：選取態已由面板的 filter chip 本身表達，取消＝再點一下。
   return c
 })
 
@@ -269,25 +284,63 @@ onBeforeUnmount(() => {
         @change="apply"
       />
     </div>
-    <div v-if="reference.tags.length" class="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-      <span class="text-ink-2">標籤(任一)：</span>
-      <label v-for="t in reference.tags" :key="'any-' + t.id" class="flex items-center gap-1">
-        <input
-          type="checkbox"
-          :checked="filters.tagsAny.includes(t.id)"
-          @change="toggleTag('tagsAny', t.id)"
-        />{{ t.name }}
-      </label>
-    </div>
-    <div v-if="reference.tags.length" class="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-      <span class="text-ink-2">標籤(全部)：</span>
-      <label v-for="t in reference.tags" :key="'all-' + t.id" class="flex items-center gap-1">
-        <input
-          type="checkbox"
-          :checked="filters.tagsAll.includes(t.id)"
-          @change="toggleTag('tagsAll', t.id)"
-        />{{ t.name }}
-      </label>
+    <!-- 標籤＝filter chips：按鈕狀態即選取態（aria-pressed），選取＝填色＋勾號 -->
+    <div v-if="reference.tags.length" class="flex flex-wrap items-center gap-1.5 text-sm">
+      <span class="text-ink-2">標籤：</span>
+      <button
+        v-for="t in reference.tags"
+        :key="t.id"
+        type="button"
+        :aria-pressed="isTagOn(t.id)"
+        class="inline-flex items-center gap-1 rounded-full border px-2.5 py-1"
+        :class="
+          isTagOn(t.id)
+            ? 'bg-brand-tint text-brand-text border-transparent font-medium'
+            : 'border-hairline text-ink'
+        "
+        @click="toggleTag(t.id)"
+      >
+        <svg
+          v-if="isTagOn(t.id)"
+          viewBox="0 0 24 24"
+          class="h-3.5 w-3.5"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="3"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M5 13l4 4L19 7" />
+        </svg>
+        {{ t.name }}
+      </button>
+      <!-- 符合方式：單選時任一＝全部（語意等價），選 ≥2 才有意義 -->
+      <div
+        v-if="selectedTags.length >= 2"
+        data-test="tag-mode"
+        class="ml-1 inline-flex items-center gap-1"
+      >
+        <span class="text-ink-2">符合</span>
+        <button
+          type="button"
+          :aria-pressed="tagMode === 'any'"
+          class="rounded-full px-2 py-0.5"
+          :class="tagMode === 'any' ? 'bg-brand-tint text-brand-text font-medium' : 'text-ink-2'"
+          @click="setTagMode('any')"
+        >
+          任一
+        </button>
+        <button
+          type="button"
+          :aria-pressed="tagMode === 'all'"
+          class="rounded-full px-2 py-0.5"
+          :class="tagMode === 'all' ? 'bg-brand-tint text-brand-text font-medium' : 'text-ink-2'"
+          @click="setTagMode('all')"
+        >
+          全部
+        </button>
+      </div>
     </div>
   </Card>
 
