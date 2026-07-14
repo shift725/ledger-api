@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { RouterLink } from 'vue-router'
 import { toastMessage } from '@/lib/toast'
+import { SETTINGS_SECTIONS } from '@/lib/settingsSections'
 
 // 路由與資料層完全共用，手機/桌面只差版面。
 const mainNav = [
@@ -8,14 +9,11 @@ const mainNav = [
   { label: '交易', to: '/transactions' },
   { label: '報表', to: '/reports' },
 ]
-const settingsChildren = [
-  { label: '帳戶', to: '/settings/accounts' },
-  { label: '分類', to: '/settings/categories' },
-  { label: '標籤', to: '/settings/tags' },
-  { label: '定期定額', to: '/settings/rules' },
-  { label: '儲蓄目標', to: '/settings/goals' },
-  { label: '個人資料', to: '/settings/profile' },
-]
+// 設定子項清單與 SettingsView／SettingsSectionView 共用單一來源。
+const settingsChildren = SETTINGS_SECTIONS.map((s) => ({
+  label: s.label,
+  to: `/settings/${s.slug}`,
+}))
 
 const activeCls = 'text-brand-text font-medium'
 </script>

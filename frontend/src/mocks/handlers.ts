@@ -31,6 +31,17 @@ export const handlers: RequestHandler[] = [
     HttpResponse.json({ access: 'access-2', refresh: 'refresh-2' }),
   ),
   http.post('*/api/auth/logout/', () => HttpResponse.json({ message: '登出成功' })),
+  // 個人資料預設（各 spec 以 server.use 覆寫）；設定面派發測試會掛載 ProfileSection。
+  http.get('*/api/auth/users/:id', () =>
+    HttpResponse.json({
+      id: 'user-1',
+      username: 'demo',
+      email: 'demo@example.com',
+      phone: '',
+      role: 'member',
+      created_at: '2026-07-12T00:00:00Z',
+    }),
+  ),
 
   // ── dashboard 五區塊罐頭 ──
   http.get('*/api/ledger/reports/summary/', () =>
@@ -159,6 +170,14 @@ export const handlers: RequestHandler[] = [
         { id: 'tag-2', name: '訂閱', description: '' },
       ],
     }),
+  ),
+  // 定期定額／儲蓄目標清單預設空（各 spec 以 server.use 覆寫）；設定面派發測試會掛載
+  // Rules/Goals section，缺此 handler 會產生未處理請求、洩漏成其他檔的偽失敗。
+  http.get('*/api/ledger/recurring-rules/', () =>
+    HttpResponse.json({ count: 0, next: null, previous: null, results: [] }),
+  ),
+  http.get('*/api/ledger/savings-goals/', () =>
+    HttpResponse.json({ count: 0, next: null, previous: null, results: [] }),
   ),
   http.get('*/api/ledger/transactions/', () =>
     HttpResponse.json({

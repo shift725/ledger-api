@@ -16,7 +16,8 @@ interface Page<T> {
 }
 
 // 翻頁抓齊：next 非 null 就續抓下一頁（不解析 next URL，改遞增 page，避免耦合後端 host）。
-async function fetchAll<T>(
+// export 供設定面的 rules/goals 區塊在自己的 store 外復用同一套翻頁邏輯。
+export async function fetchAll<T>(
   fetchPage: (page: number) => Promise<{ data?: Page<T>; error?: unknown }>,
 ): Promise<T[]> {
   const items: T[] = []
