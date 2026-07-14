@@ -6,6 +6,7 @@ import AccountsSection from '@/components/settings/AccountsSection.vue'
 import SimpleResourceSection from '@/components/settings/SimpleResourceSection.vue'
 import RulesSection from '@/components/settings/RulesSection.vue'
 import GoalsSection from '@/components/settings/GoalsSection.vue'
+import ProfileSection from '@/components/settings/ProfileSection.vue'
 
 // /settings/:section 的派發殼：驗 slug、掛標題、依 slug 掛對應區塊元件（可帶 props）。
 // 尚未實作的 slug 落佔位；未知 slug → 找不到此頁。分類/標籤同形共用泛用元件。
@@ -19,6 +20,7 @@ const sectionComponents: Record<string, SectionEntry> = {
   tags: { comp: SimpleResourceSection, props: { resource: 'tags' } },
   rules: { comp: RulesSection },
   goals: { comp: GoalsSection },
+  profile: { comp: ProfileSection },
 }
 const route = useRoute()
 const section = computed(() => SETTINGS_SECTIONS.find((s) => s.slug === route.params.section))

@@ -43,6 +43,13 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem(USER_KEY)
   }
 
+  // 個人資料編輯成功後同步 store 追蹤的欄位（username/email 等），讓殼等處即時反映。
+  function updateUser(patch: Partial<AuthUser>) {
+    if (!user.value) return
+    user.value = { ...user.value, ...patch }
+    localStorage.setItem(USER_KEY, JSON.stringify(user.value))
+  }
+
   async function login(email: string, password: string) {
     const data = await auth.login(email, password)
     setSession(data.access, data.refresh, data.user)
@@ -103,5 +110,6 @@ export const useAuthStore = defineStore('auth', () => {
     logout,
     refreshAccess,
     clearSession,
+    updateUser,
   }
 })

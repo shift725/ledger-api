@@ -31,6 +31,17 @@ export const handlers: RequestHandler[] = [
     HttpResponse.json({ access: 'access-2', refresh: 'refresh-2' }),
   ),
   http.post('*/api/auth/logout/', () => HttpResponse.json({ message: '登出成功' })),
+  // 個人資料預設（各 spec 以 server.use 覆寫）；設定面派發測試會掛載 ProfileSection。
+  http.get('*/api/auth/users/:id', () =>
+    HttpResponse.json({
+      id: 'user-1',
+      username: 'demo',
+      email: 'demo@example.com',
+      phone: '',
+      role: 'member',
+      created_at: '2026-07-12T00:00:00Z',
+    }),
+  ),
 
   // ── dashboard 五區塊罐頭 ──
   http.get('*/api/ledger/reports/summary/', () =>
