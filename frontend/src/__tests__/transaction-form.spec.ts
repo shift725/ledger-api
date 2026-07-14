@@ -105,6 +105,31 @@ describe('TransactionFormView — 記一筆', () => {
     expect(wrapper.text()).toContain('金額必須大於 0')
   })
 
+  it('無帳戶時：欄位下方繁中提示到「更多 → 帳戶」設定，且不送出', async () => {
+    server.use(
+      http.get('*/api/ledger/accounts/', () =>
+        HttpResponse.json({ count: 0, next: null, previous: null, results: [] }),
+      ),
+    )
+    let called = false
+    server.use(
+      http.post('*/api/ledger/transactions/', () => {
+        called = true
+        return HttpResponse.json({ id: 'x' }, { status: 201 })
+      }),
+    )
+    const { wrapper } = await mountForm('/transactions/new')
+    await wrapper.find('input[data-test="form-amount"]').setValue('100')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(called).toBe(false) // 前端擋住，不打後端拿英文 400
+    const err = wrapper.find('[data-test="form-account-error"]')
+    expect(err.exists()).toBe(true)
+    expect(err.text()).toContain('帳戶')
+    expect(err.text()).toContain('更多') // 引導新使用者去哪設定
+  })
+
   it('次層收合：更多欄位預設隱藏、展開後可填 name', async () => {
     const { wrapper } = await mountForm('/transactions/new')
     expect(wrapper.find('input[data-test="form-name"]').exists()).toBe(false)

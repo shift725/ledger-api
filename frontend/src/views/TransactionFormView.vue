@@ -40,6 +40,7 @@ const form = reactive({
 
 const showMore = ref(false)
 const amountError = ref('')
+const accountError = ref('')
 const serverError = ref('')
 
 const AMOUNT_RE = /^\d+(\.\d{1,2})?$/
@@ -60,7 +61,11 @@ function toggleTag(id: string) {
 
 async function submit() {
   serverError.value = ''
-  if (!validateAmount()) return
+  const amountOk = validateAmount()
+  // 帳戶為空只可能是「使用者一個帳戶都還沒建」（有帳戶時預設會選好）→ 欄位下方引導去設定，
+  // 擋在送出前，不讓空值打到後端拿一句英文的 "This field may not be null."
+  accountError.value = form.account ? '' : '尚未設定帳戶，請先到「更多 → 帳戶」新增帳戶後再記帳。'
+  if (!amountOk || accountError.value) return
   const payload = {
     account: form.account,
     amount: form.amount,
@@ -176,6 +181,9 @@ onMounted(async () => {
         >
           <option v-for="a in reference.accounts" :key="a.id" :value="a.id">{{ a.name }}</option>
         </select>
+        <span v-if="accountError" data-test="form-account-error" class="text-expense text-sm">{{
+          accountError
+        }}</span>
       </label>
 
       <!-- 日期時間 -->
