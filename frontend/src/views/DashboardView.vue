@@ -114,15 +114,15 @@ function goalPercent(goal: SavingsGoalStatus): number {
       <p v-if="summary.error" class="text-ink-2">載入失敗</p>
       <template v-else-if="summary.data">
         <Row>
-          <span class="text-ink-2">收入</span>
+          <span class="text-ink-2">本月收入</span>
           <Amount :value="summary.data.income" type="income" />
         </Row>
         <Row class="mt-2">
-          <span class="text-ink-2">支出</span>
+          <span class="text-ink-2">本月支出</span>
           <Amount :value="summary.data.expense" type="expense" />
         </Row>
         <Row class="border-hairline mt-2.5 border-t pt-2.5">
-          <span>淨額</span>
+          <span>本月淨額</span>
           <span class="font-medium">{{ netDisplay }}</span>
         </Row>
       </template>

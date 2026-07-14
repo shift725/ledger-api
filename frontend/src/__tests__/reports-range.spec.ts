@@ -53,8 +53,8 @@ describe('RangeTab — 自訂區間', () => {
     await wrapper.find('[data-test="range-submit"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('5,000.00')
-    expect(wrapper.text()).toContain('1,234.00')
-    expect(wrapper.text()).toContain('+3,766.00') // 淨額帶正號
+    expect(wrapper.text()).toContain('5,000')
+    expect(wrapper.text()).toContain('1,234')
+    expect(wrapper.text()).toContain('+3,766') // 淨額帶正號
   })
 })

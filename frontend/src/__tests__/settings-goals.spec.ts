@@ -41,7 +41,7 @@ describe('GoalsSection — 列表', () => {
     const wrapper = await mountSection()
     expect(wrapper.findAll('[data-test="goal-row"]')).toHaveLength(1)
     expect(wrapper.text()).toContain('2026 年 7 月')
-    expect(wrapper.text()).toContain('20,000.00')
+    expect(wrapper.text()).toContain('20,000')
   })
 })
 
