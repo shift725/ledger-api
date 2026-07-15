@@ -1,4 +1,4 @@
-"""報表端點的 OpenAPI 標註（drf-spectacular）。
+"""本專案的 OpenAPI 標註（drf-spectacular）——報表端點與 auth 核心端點。
 
 報表回應是 reports.py 手組的 dict，AutoSchema 自動推導只吃 serializer、看不到形狀，
 不標註就是「200 無 schema」的空殼文件。這裡用 inline_serializer 把實際信封逐鍵宣告——
@@ -7,11 +7,17 @@
 
 金額一律 DecimalField：DRF 把 Decimal 序列化成字串（保精度與尾零），schema 對應
 string(format=decimal)——client 不可當 number 解析。
+
+auth 端點的標註在檔尾：view 住 accounts/（upstream 繼承檔，不動），掛不了 decorator，
+改走 OpenApiViewExtension——機制說明見該區塊註解。
 """
 
+from drf_spectacular.extensions import OpenApiViewExtension
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema, inline_serializer
 from rest_framework import serializers
+
+from accounts.serializers import UserSerializer
 
 from .models import Account, SavingsGoal, Transaction
 
@@ -192,3 +198,92 @@ savings_goal_status = extend_schema(
         },
     ),
 )
+
+
+# ── auth 端點（accounts/ 的核心繼承 view）─────────────────────────────────────
+# 這三支的回應（與 logout 的請求）是 view/serializer 手組的 dict：AutoSchema 只能從
+# 輸入序列化器推導，於是把輸入形當回應寫進 schema（logout 連 serializer 都沒有，
+# 整支被跳過、產生器印「unable to guess serializer」）。view 不能動，改用
+# OpenApiViewExtension 補標註：class 定義即完成註冊（metaclass 副作用，無人 import
+# 也生效——本模組經 views.py 必然載入）；產 schema 時 view_replacement() 的回傳值
+# 取代目標 view 參與推導，runtime 請求路徑完全不經過它。
+# 只宣告成功回應：凍結契約全站只描述成功形狀，錯誤形狀不在此擴充。
+
+_login_response = inline_serializer(
+    name='LoginResponse',
+    fields={
+        'access': serializers.CharField(),
+        'refresh': serializers.CharField(),
+        # user 是 validate() 手組的四鍵子集（不是 UserSerializer）；role 在此無 choices
+        # 驗證，宣告 CharField——用 ChoiceField 會多生一個 enum、徒增撞名面。
+        'user': inline_serializer(
+            name='LoginResponseUser',
+            fields={
+                'id': serializers.UUIDField(),
+                'username': serializers.CharField(),
+                'email': serializers.EmailField(),
+                'role': serializers.CharField(),
+            },
+        ),
+    },
+)
+
+_register_response = inline_serializer(
+    name='RegisterResponse',
+    fields={
+        'message': serializers.CharField(),
+        # 這鍵回的是完整 UserSerializer——直接複用，讓 schema 引既有 User component，
+        # 不手抄第二份形狀。
+        'user': UserSerializer(),
+        'tokens': inline_serializer(
+            name='RegisterResponseTokens',
+            fields={
+                'access': serializers.CharField(),
+                'refresh': serializers.CharField(),
+            },
+        ),
+    },
+)
+
+_logout_request = inline_serializer(
+    name='LogoutRequest',
+    fields={'refresh': serializers.CharField()},
+)
+
+_logout_response = inline_serializer(
+    name='LogoutResponse',
+    fields={'message': serializers.CharField()},
+)
+
+
+class _LoginSchemaFix(OpenApiViewExtension):
+    target_class = 'accounts.views.CustomTokenObtainPairView'
+
+    def view_replacement(self):
+        @extend_schema(responses={200: _login_response})
+        class Fixed(self.target_class):
+            pass
+
+        return Fixed
+
+
+class _RegisterSchemaFix(OpenApiViewExtension):
+    target_class = 'accounts.views.UserRegisterView'
+
+    def view_replacement(self):
+        @extend_schema(responses={201: _register_response})
+        class Fixed(self.target_class):
+            pass
+
+        return Fixed
+
+
+class _LogoutSchemaFix(OpenApiViewExtension):
+    target_class = 'accounts.views.LogoutView'
+
+    def view_replacement(self):
+        @extend_schema(request=_logout_request, responses={200: _logout_response})
+        class Fixed(self.target_class):
+            pass
+
+        return Fixed

@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Ledger API
-  version: 1.0.0
+  version: 1.0.1
   description: 記帳 REST API：JWT 認證、帳戶／分類／標籤／交易／儲蓄目標 CRUD 與報表聚合。
 paths:
   /api/auth/login/:
@@ -29,7 +29,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CustomTokenObtainPair'
+                $ref: '#/components/schemas/LoginResponse'
           description: ''
   /api/auth/logout/:
     post:
@@ -37,11 +37,27 @@ paths:
       description: POST /api/auth/logout/ — 將傳入的 refresh token 加入黑名單。
       tags:
       - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LogoutRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/LogoutRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/LogoutRequest'
+        required: true
       security:
       - jwtAuth: []
       responses:
         '200':
-          description: No response body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogoutResponse'
+          description: ''
   /api/auth/register/:
     post:
       operationId: auth_register_create
@@ -67,7 +83,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/UserRegister'
+                $ref: '#/components/schemas/RegisterResponse'
           description: ''
   /api/auth/token/refresh/:
     post:
@@ -1839,6 +1855,51 @@ components:
       required:
       - email
       - password
+    LoginResponse:
+      type: object
+      properties:
+        access:
+          type: string
+        refresh:
+          type: string
+        user:
+          $ref: '#/components/schemas/LoginResponseUser'
+      required:
+      - access
+      - refresh
+      - user
+    LoginResponseUser:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+      required:
+      - email
+      - id
+      - role
+      - username
+    LogoutRequest:
+      type: object
+      properties:
+        refresh:
+          type: string
+      required:
+      - refresh
+    LogoutResponse:
+      type: object
+      properties:
+        message:
+          type: string
+      required:
+      - message
     MonthSummary:
       type: object
       properties:
@@ -2274,6 +2335,29 @@ components:
       - id
       - next_run_date
       - type
+    RegisterResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        user:
+          $ref: '#/components/schemas/User'
+        tokens:
+          $ref: '#/components/schemas/RegisterResponseTokens'
+      required:
+      - message
+      - tokens
+      - user
+    RegisterResponseTokens:
+      type: object
+      properties:
+        access:
+          type: string
+        refresh:
+          type: string
+      required:
+      - access
+      - refresh
     RoleEnum:
       enum:
       - admin
