@@ -901,6 +901,25 @@ export interface components {
             email: string;
             password: string;
         };
+        LoginResponse: {
+            access: string;
+            refresh: string;
+            user: components["schemas"]["LoginResponseUser"];
+        };
+        LoginResponseUser: {
+            /** Format: uuid */
+            id: string;
+            username: string;
+            /** Format: email */
+            email: string;
+            role: string;
+        };
+        LogoutRequest: {
+            refresh: string;
+        };
+        LogoutResponse: {
+            message: string;
+        };
         MonthSummary: {
             year: number;
             month: number;
@@ -1121,6 +1140,15 @@ export interface components {
             readonly account_name: string;
             readonly category_name: string | null;
         };
+        RegisterResponse: {
+            message: string;
+            user: components["schemas"]["User"];
+            tokens: components["schemas"]["RegisterResponseTokens"];
+        };
+        RegisterResponseTokens: {
+            access: string;
+            refresh: string;
+        };
         /**
          * @description * `admin` - 管理員
          *     * `staff` - 員工
@@ -1264,7 +1292,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CustomTokenObtainPair"];
+                    "application/json": components["schemas"]["LoginResponse"];
                 };
             };
         };
@@ -1276,14 +1304,21 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LogoutRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["LogoutRequest"];
+                "multipart/form-data": components["schemas"]["LogoutRequest"];
+            };
+        };
         responses: {
-            /** @description No response body */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["LogoutResponse"];
+                };
             };
         };
     };
@@ -1307,7 +1342,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["UserRegister"];
+                    "application/json": components["schemas"]["RegisterResponse"];
                 };
             };
         };

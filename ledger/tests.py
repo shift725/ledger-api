@@ -2214,6 +2214,43 @@ class TestOpenAPISchema:
             assert prop['type'] == 'string', (component, field)
             assert prop['format'] == 'decimal', (component, field)
 
+    def test_login_response_declares_actual_shape(self):
+        # login 的 200 是 serializer.validate() 手組的 dict（access/refresh/user），
+        # AutoSchema 從輸入序列化器推導、看不到手組形狀，會把輸入形當回應寫進 schema
+        # ——下游 codegen 就拿到錯的型別。修正後 200 必須引用 LoginResponse 且鍵齊全。
+        schema = SchemaGenerator().get_schema(request=None, public=True)
+        ref = schema['paths']['/api/auth/login/']['post']['responses']['200']['content'][
+            'application/json'
+        ]['schema']['$ref']
+        assert ref == '#/components/schemas/LoginResponse'
+        props = schema['components']['schemas']['LoginResponse']['properties']
+        assert {'access', 'refresh', 'user'} <= props.keys()
+
+    def test_register_response_declares_actual_shape(self):
+        # register 的 201 是 view 手組的 dict（message/user/tokens）；user 這鍵序列化
+        # 的是完整 UserSerializer——schema 必須引用既有 User component，不手抄第二份形狀。
+        schema = SchemaGenerator().get_schema(request=None, public=True)
+        ref = schema['paths']['/api/auth/register/']['post']['responses']['201']['content'][
+            'application/json'
+        ]['schema']['$ref']
+        assert ref == '#/components/schemas/RegisterResponse'
+        props = schema['components']['schemas']['RegisterResponse']['properties']
+        assert {'message', 'user', 'tokens'} <= props.keys()
+        assert '#/components/schemas/User' in str(props['user'])
+
+    def test_logout_declares_request_body_and_response(self):
+        # LogoutView 是無 serializer 的 APIView：AutoSchema 推不出任何形狀，schema 呈現
+        # 「無 requestBody＋No response body」——但實際要吃 {refresh}、回 {message}。
+        # 文件頁 Try it out 因此連送 refresh 的欄位都沒有。
+        schema = SchemaGenerator().get_schema(request=None, public=True)
+        post = schema['paths']['/api/auth/logout/']['post']
+        req = post['requestBody']['content']['application/json']['schema']['$ref']
+        assert req == '#/components/schemas/LogoutRequest'
+        assert 'refresh' in schema['components']['schemas']['LogoutRequest']['properties']
+        resp = post['responses']['200']['content']['application/json']['schema']['$ref']
+        assert resp == '#/components/schemas/LogoutResponse'
+        assert 'message' in schema['components']['schemas']['LogoutResponse']['properties']
+
     def test_frozen_contract_matches_generated_schema(self):
         # 契約凍結看守：repo 根 openapi.yaml 是對前端凍結的契約落檔（下游拿它生型別）。
         # 動到 API 形狀的任何變更都會在這裡紅——刻意變更的儀式是重新 export＋依 SemVer

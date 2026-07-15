@@ -4,18 +4,17 @@ import { useAuthStore } from '@/stores/auth'
 import { toast } from '@/lib/toast'
 import router from '@/router'
 
-// Typed client for business endpoints (the ones whose schema is accurate). Auth
-// endpoints bypass this and use plain fetch in api/auth.ts — see that file.
+// 業務端點的 typed client。auth 四端點繞過本 client、在 api/auth.ts 用原生
+// fetch——理由見該檔檔頭（refresh 是本 middleware 依賴的零件，走回來會遞迴；
+// auth 端點的 401 語意也不同，不該觸發自動續期）。
 //
-// This module imports the store and router, and both are used only inside the
-// callbacks below (never at module top level), so the ESM import cycle
-// client -> store -> api/auth and client -> router -> store stays safe. Moving
-// either call to top level would execute mid-initialization and break.
+// 本模組 import 了 store 與 router，但兩者只在下面的 callback 內呼叫（絕不在
+// 模組頂層），client → store → api/auth 與 client → router → store 這兩條
+// ESM import 環才安全。任一呼叫移到頂層＝在模組初始化半途執行，會直接炸。
 
-// A request's body is a one-shot stream: fetch consumes it, so a 401'd request
-// can't be re-sent as-is. We clone each request before it goes out and replay
-// the clone (whose body is intact) after refreshing. Keyed by openapi-fetch's
-// per-request id, which links onRequest and onResponse.
+// request body 是一次性 stream：fetch 會消耗它，吃到 401 的請求無法原樣重送。
+// 所以每個請求送出前先 clone 留底，refresh 完重放 clone（body 完好）。以
+// openapi-fetch 的 per-request id 為鍵，把 onRequest 與 onResponse 串起來。
 const replayClones = new Map<string, Request>()
 
 const authMiddleware: Middleware = {
@@ -46,7 +45,7 @@ const authMiddleware: Middleware = {
     try {
       access = await store.refreshAccess()
     } catch {
-      // Refresh token is dead (expired or blacklisted): the session is over.
+      // refresh token 已死（過期或進黑名單）：session 到此結束。
       store.clearSession()
       await router.push('/login')
       return response
