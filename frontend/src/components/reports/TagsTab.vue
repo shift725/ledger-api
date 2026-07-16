@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { api } from '@/api/client'
+import { loadErrorText } from '@/lib/online'
 import type { components } from '@/api/schema'
 import { toTagBar, tagRows, barChartOptions, type Flow } from '@/lib/reportCharts'
 import ChartCanvas from './ChartCanvas.vue'
@@ -51,7 +52,7 @@ const options = barChartOptions()
 <template>
   <Card>
     <MonthFlowControls v-model:year="year" v-model:month="month" v-model:flow="flow" />
-    <p v-if="error" class="text-ink-2 py-6 text-center">載入失敗</p>
+    <p v-if="error" class="text-ink-2 py-6 text-center">{{ loadErrorText }}</p>
     <p v-else-if="loading && !breakdown" class="text-ink-2 py-6 text-center">載入中…</p>
     <p v-else-if="isEmpty" class="text-ink-2 py-6 text-center">
       本月無{{ flow === 'expense' ? '支出' : '收入' }}標籤資料

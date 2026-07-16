@@ -68,6 +68,17 @@ describe('auth store — register', () => {
 })
 
 describe('auth store — logout', () => {
+  it('離線登出（API 網路錯）：不拋例外、本地 session 照清', async () => {
+    server.use(http.post('*/api/auth/logout/', () => HttpResponse.error()))
+    const store = useAuthStore()
+    await store.login('demo@example.com', 'pw')
+
+    // 不得 throw——否則呼叫端的 router.push('/login') 斷掉、人卡在受保護頁
+    await expect(store.logout()).resolves.toBeUndefined()
+    expect(store.isAuthenticated).toBe(false)
+    expect(store.user).toBeNull()
+  })
+
   it('calls the logout endpoint and clears store + localStorage', async () => {
     let logoutHit = false
     server.use(

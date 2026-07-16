@@ -60,6 +60,45 @@ describe('TransactionFormView — 記一筆', () => {
     await vi.waitFor(() => expect(router.currentRoute.value.path).toBe('/transactions'))
   })
 
+  it('編輯載入遇網路錯：顯示離線文案、不給空表單（防空值誤存）', async () => {
+    server.use(http.get('*/api/ledger/transactions/txn-9/', () => HttpResponse.error()))
+    window.dispatchEvent(new Event('offline'))
+    try {
+      const { wrapper } = await mountForm('/transactions/txn-9')
+      expect(wrapper.text()).toContain('離線中，暫無法載入')
+      expect(wrapper.find('form').exists()).toBe(false)
+    } finally {
+      window.dispatchEvent(new Event('online'))
+    }
+  })
+
+  it('刪除遇網路錯：顯示錯誤訊息、不無聲失敗', async () => {
+    server.use(
+      http.get('*/api/ledger/transactions/:id', () => HttpResponse.json(editable)),
+      http.delete('*/api/ledger/transactions/txn-1/', () => HttpResponse.error()),
+    )
+    const { wrapper } = await mountForm('/transactions/txn-1')
+    await wrapper.find('[data-test="confirm-delete"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="form-error"]').text()).toContain('網路連線失敗')
+  })
+
+  it('離線送出（fetch 網路錯）：入離線佇列＋提示＋導回列表', async () => {
+    server.use(http.post('*/api/ledger/transactions/', () => HttpResponse.error()))
+    const { wrapper, router } = await mountForm('/transactions/new')
+    useAuthStore().user = { id: 'user-a', username: 'a', email: 'a@x.tw', role: 'member' }
+    await wrapper.find('input[data-test="form-amount"]').setValue('77.00')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    const queued = JSON.parse(localStorage.getItem('queue:user-a') ?? '[]')
+    expect(queued).toHaveLength(1)
+    expect(queued[0].txn.amount).toBe('77.00')
+    expect(queued[0].txn.occurred_at).toMatch(/^\d{4}-\d{2}-\d{2}T.*Z$/) // 時間戳＝離線當下
+    expect(toastMessage.value).toContain('離線')
+    await vi.waitFor(() => expect(router.currentRoute.value.path).toBe('/transactions'))
+  })
+
   it('金額非法（負數）擋住不送、顯示錯誤', async () => {
     let called = false
     server.use(

@@ -96,6 +96,18 @@ jobs:
       - name: 建置（vite build）
         run: npm run build
 
+      # PWA 產物斷言：manifest＋service worker 存在、index.html 有掛 manifest。
+      # （Lighthouse 12 移除了 PWA category，installability 由此斷言＋實機驗承接）
+      - name: PWA 產物斷言
+        run: |
+          test -f dist/manifest.webmanifest
+          test -f dist/sw.js
+          grep -q 'rel="manifest"' dist/index.html
+
+      # a11y 守門：起 preview 掃 login/register，assert 見 lighthouserc.cjs（滿分門檻）。
+      - name: Lighthouse accessibility 守門
+        run: npx lhci autorun
+
       # 契約看守：重生型別後 git diff 必須乾淨——openapi.yaml 改了卻沒重生型別即 fail。
       - name: 契約型別未漂移
         run: |

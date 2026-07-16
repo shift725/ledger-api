@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { api } from '@/api/client'
+import { loadErrorText } from '@/lib/online'
 import type { components } from '@/api/schema'
 import { emptyFilterState, parseQuery, toApiParams, toQuery, ORDERINGS } from '@/lib/txnFilters'
 import { useReferenceStore } from '@/stores/reference'
@@ -359,7 +360,7 @@ onBeforeUnmount(() => {
   </div>
 
   <Card class="py-1">
-    <p v-if="error" class="text-ink-2 py-2.5">載入失敗</p>
+    <p v-if="error" class="text-ink-2 py-2.5">{{ loadErrorText }}</p>
     <p v-else-if="empty" class="text-ink-2 py-6 text-center">沒有交易</p>
     <template v-else>
       <RouterLink

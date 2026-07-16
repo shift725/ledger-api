@@ -7,14 +7,11 @@ import { useReferenceStore } from '@/stores/reference'
 import { toDatetimeLocal } from '@/lib/format'
 import { toast } from '@/lib/toast'
 import { messagesFrom } from '@/lib/errors'
+import { enqueue, type TxnWrite } from '@/lib/offlineQueue'
+import { loadErrorText } from '@/lib/online'
 import Card from '@/components/ui/UiCard.vue'
 
 type Transaction = components['schemas']['Transaction']
-// 契約無 TransactionRequest（寫入與回應共用 Transaction）→ 送出前剝唯讀衍生欄。
-type TransactionWrite = Omit<
-  Transaction,
-  'id' | 'source_rule' | 'account_name' | 'category_name' | 'tag_names'
->
 
 const router = useRouter()
 const route = useRoute()
@@ -24,6 +21,9 @@ const reference = useReferenceStore()
 const id = computed(() => route.params.id as string | undefined)
 const isEdit = computed(() => Boolean(id.value))
 const notFound = ref(false)
+// 編輯內容載不到（網路錯）≠ 404：顯示可重試的失敗態，且不給空表單——
+// 否則離線點編輯會看到空白欄位，一按儲存就把空值 PATCH 上去。
+const loadFailed = ref(false)
 const deleteDialog = ref<HTMLDialogElement | null>(null)
 
 // 契約必填僅 account/amount/type → 主層極簡，其餘進次層收合。
@@ -70,22 +70,39 @@ async function submit() {
     account: form.account,
     amount: form.amount,
     type: form.type,
-    occurred_at: new Date(form.occurredAt).toISOString(), // 明送 instant
+    occurred_at: new Date(form.occurredAt).toISOString(), // 明送 instant：離線佇列補送時時間戳仍是記帳當下
     category: form.category || null,
     tags: form.tags,
     name: form.name,
     description: form.description,
-  } satisfies TransactionWrite
+  } satisfies TxnWrite
   // 契約以同一 Transaction 型別描述 body，含 readonly 衍生欄 → 單點轉型送出。
   const body = payload as unknown as Transaction
-  const { error } = isEdit.value
-    ? await api.PATCH('/api/ledger/transactions/{id}/', {
-        params: { path: { id: id.value! } },
-        body,
-      })
-    : await api.POST('/api/ledger/transactions/', { body })
-  if (error) {
-    serverError.value = messagesFrom(error)
+  let result
+  try {
+    result = isEdit.value
+      ? await api.PATCH('/api/ledger/transactions/{id}/', {
+          params: { path: { id: id.value! } },
+          body,
+        })
+      : await api.POST('/api/ledger/transactions/', { body })
+  } catch {
+    // fetch 直接炸＝網路不通。新增交易入離線佇列（恢復連線自動補送）；
+    // 編輯不入隊——離線編輯的順序與衝突問題不在範圍，如實顯示失敗。
+    if (!isEdit.value) {
+      enqueue(payload)
+      toast('目前離線：已存入待送佇列，恢復連線後自動補送')
+      router.push('/transactions')
+    } else {
+      serverError.value = '網路連線失敗，請稍後再試'
+    }
+    return
+  }
+  // narrow 前先取出：契約只描述成功形狀 → error 型別為 never，
+  // 對 result 整體做 truthy narrow 會讓 union collapse 成 never。
+  const submitError: unknown = result.error
+  if (submitError) {
+    serverError.value = messagesFrom(submitError)
     return
   }
   toast('已儲存')
@@ -94,11 +111,18 @@ async function submit() {
 
 async function confirmDelete() {
   deleteDialog.value?.close?.()
-  const { error } = await api.DELETE('/api/ledger/transactions/{id}/', {
-    params: { path: { id: id.value! } },
-  })
-  if (error) {
-    serverError.value = messagesFrom(error)
+  let result
+  try {
+    result = await api.DELETE('/api/ledger/transactions/{id}/', {
+      params: { path: { id: id.value! } },
+    })
+  } catch {
+    serverError.value = '網路連線失敗，請稍後再試'
+    return
+  }
+  const deleteError: unknown = result.error
+  if (deleteError) {
+    serverError.value = messagesFrom(deleteError)
     return
   }
   toast('已刪除')
@@ -108,9 +132,16 @@ async function confirmDelete() {
 onMounted(async () => {
   await reference.ensure()
   if (isEdit.value) {
-    const { data, error } = await api.GET('/api/ledger/transactions/{id}/', {
-      params: { path: { id: id.value! } },
-    })
+    let res
+    try {
+      res = await api.GET('/api/ledger/transactions/{id}/', {
+        params: { path: { id: id.value! } },
+      })
+    } catch {
+      loadFailed.value = true // 網路不通（多半離線）——不是 404，別說「找不到」
+      return
+    }
+    const { data, error } = res
     if (error || !data) {
       notFound.value = true // 跨用戶亦回 404（後端藏存在性）→ 一律「找不到」，不提權限
       return
@@ -138,6 +169,8 @@ onMounted(async () => {
   </header>
 
   <p v-if="notFound" class="text-ink-2 py-10 text-center">找不到這筆交易</p>
+
+  <p v-else-if="loadFailed" class="text-ink-2 py-10 text-center">{{ loadErrorText }}</p>
 
   <form v-else class="flex flex-col gap-2.5" @submit.prevent="submit">
     <Card class="flex flex-col gap-3">

@@ -30,6 +30,69 @@ describe('佔位路由', () => {
   )
 })
 
+describe('AppShell 離線 banner', () => {
+  it('offline 顯示（含待送筆數）、online 消失', async () => {
+    const auth = useAuthStore()
+    auth.user = { id: 'user-a', username: 'a', email: 'a@x.tw', role: 'member' }
+    const { enqueue } = await import('@/lib/offlineQueue')
+    const txn = {
+      account: 'acc-1',
+      amount: '1.00',
+      type: 'expense' as const,
+      occurred_at: '2026-07-15T10:00:00.000Z',
+      category: null,
+      tags: [],
+      name: '',
+      description: '',
+    }
+    enqueue(txn)
+    enqueue(txn)
+
+    const router = freshRouter()
+    await router.push('/')
+    const wrapper = mount(AppShell, { global: { plugins: [pinia, router] } })
+
+    window.dispatchEvent(new Event('offline'))
+    await flushPromises()
+    const banner = wrapper.find('[data-test="offline-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('離線中')
+    expect(banner.text()).toContain('2 筆待送')
+
+    window.dispatchEvent(new Event('online'))
+    await flushPromises()
+    expect(wrapper.find('[data-test="offline-banner"]').exists()).toBe(false)
+  })
+})
+
+describe('AppShell 離線登出警告', () => {
+  it('離線按登出：取消確認則不登出；確認則照常登出', async () => {
+    const auth = useAuthStore()
+    auth.user = { id: 'user-a', username: 'a', email: 'a@x.tw', role: 'member' }
+    const logoutSpy = vi.spyOn(auth, 'logout').mockResolvedValue()
+    const router = freshRouter()
+    await router.push('/')
+    const wrapper = mount(AppShell, { global: { plugins: [pinia, router] } })
+
+    window.dispatchEvent(new Event('offline'))
+    try {
+      // happy-dom 未實作 window.confirm → 以 stubGlobal 提供
+      const confirmMock = vi.fn<() => boolean>(() => false)
+      vi.stubGlobal('confirm', confirmMock)
+      await wrapper.find('[data-test="sidebar-logout"]').trigger('click')
+      expect(logoutSpy).not.toHaveBeenCalled() // 取消＝不動
+
+      confirmMock.mockReturnValue(true)
+      await wrapper.find('[data-test="sidebar-logout"]').trigger('click')
+      await flushPromises()
+      expect(logoutSpy).toHaveBeenCalledOnce() // 確認＝放行（清憑證是使用者的權利）
+    } finally {
+      vi.unstubAllGlobals()
+      window.dispatchEvent(new Event('online'))
+    }
+  })
+})
+
 describe('AppShell 導覽', () => {
   it('tabbar 四格＋FAB＋sidebar 更多六子項各指向對應路由', async () => {
     const router = freshRouter()

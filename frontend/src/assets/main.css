@@ -14,7 +14,8 @@
   --color-ink-2: #6b6557;
   --color-hairline: #f0ebdd;
   --color-frame: #e3dcc9;
-  --color-brand-fill: #1e96cf;
+  /* 白字對其對比 4.9:1（WCAG AA 要求 ≥4.5）——原值 #1e96cf 僅 3.3，Lighthouse 稽核揪出後校深 */
+  --color-brand-fill: #1478a8;
   --color-brand-text: #0c7099;
   --color-brand-tint: #dff1fb;
   --color-income: #1f8353;

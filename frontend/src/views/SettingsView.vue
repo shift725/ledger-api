@@ -2,12 +2,20 @@
 import { RouterLink, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { SETTINGS_SECTIONS } from '@/lib/settingsSections'
+import { isOnline } from '@/lib/online'
 
 // 「更多」清單頁（手機鑽入；桌面 sidebar 已直達六子項）。六個子頁連結＋登出入口。
 const router = useRouter()
 const auth = useAuthStore()
 
 async function onLogout() {
+  // 離線登出的「自斷後路」警告——邏輯同 AppShell sidebar 登出，不抽共用（兩處各四行）。
+  if (
+    !isOnline.value &&
+    !window.confirm('目前離線：登出後將無法再登入，待送交易會暫停補送。確定登出？')
+  ) {
+    return
+  }
   await auth.logout()
   router.push('/login')
 }
