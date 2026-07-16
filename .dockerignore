@@ -35,6 +35,11 @@ SPEC.md
 !README.md
 requirements-dev.txt
 
+# Frontend has its own image (frontend/Dockerfile). The Django runtime never
+# serves it, and node_modules alone is ~480MB of Windows-native binaries —
+# without this line `COPY . .` triples the web image for nothing.
+frontend/
+
 # Docker build context itself
 Dockerfile
 .dockerignore
