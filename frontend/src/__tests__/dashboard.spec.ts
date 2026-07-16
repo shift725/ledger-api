@@ -24,6 +24,21 @@ beforeEach(() => {
 })
 
 describe('DashboardView 五區塊', () => {
+  it('離線降級：區塊倒下時顯示離線文案而非「載入失敗」', async () => {
+    server.use(
+      http.get('*/api/ledger/reports/summary/', () => HttpResponse.error()),
+      http.get('*/api/ledger/reports/today/', () => HttpResponse.error()),
+    )
+    window.dispatchEvent(new Event('offline'))
+    try {
+      const wrapper = await mountDashboard()
+      await vi.waitFor(() => expect(wrapper.text()).toContain('離線中，暫無法載入'))
+      expect(wrapper.text()).not.toContain('載入失敗')
+    } finally {
+      window.dispatchEvent(new Event('online')) // 復原，別汙染同檔其他測試
+    }
+  })
+
   it('五區塊罐頭資料上屏', async () => {
     const wrapper = await mountDashboard()
     await vi.waitFor(() => expect(wrapper.text()).toContain('52,000'))

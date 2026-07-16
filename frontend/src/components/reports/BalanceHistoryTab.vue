@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { api } from '@/api/client'
+import { loadErrorText } from '@/lib/online'
 import type { components } from '@/api/schema'
 import { toBalanceHistoryChart, lineChartOptions, balanceRows } from '@/lib/reportCharts'
 import ChartCanvas from './ChartCanvas.vue'
@@ -53,7 +54,7 @@ const options = lineChartOptions()
         重整
       </button>
     </div>
-    <p v-if="error" class="text-ink-2 py-6 text-center">載入失敗</p>
+    <p v-if="error" class="text-ink-2 py-6 text-center">{{ loadErrorText }}</p>
     <p v-else-if="loading && !accounts" class="text-ink-2 py-6 text-center">載入中…</p>
     <p v-else-if="isEmpty" class="text-ink-2 py-6 text-center">尚無餘額資料</p>
     <template v-else>

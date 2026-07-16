@@ -3,6 +3,8 @@ import { RouterLink, useRouter } from 'vue-router'
 import { toastMessage } from '@/lib/toast'
 import { SETTINGS_SECTIONS } from '@/lib/settingsSections'
 import { useAuthStore } from '@/stores/auth'
+import { isOnline } from '@/lib/online'
+import { queueCount } from '@/lib/offlineQueue'
 
 // 路由與資料層完全共用，手機/桌面只差版面。
 const mainNav = [
@@ -22,6 +24,14 @@ const activeCls = 'text-brand-text font-medium'
 const router = useRouter()
 const auth = useAuthStore()
 async function onLogout() {
+  // 離線登出＝本地清憑證會成功，但再登入需要網路——先警告「自斷後路」，確認後放行
+  // （使用者永遠有權清掉自己裝置上的憑證，例如把裝置借人前）。
+  if (
+    !isOnline.value &&
+    !window.confirm('目前離線：登出後將無法再登入，待送交易會暫停補送。確定登出？')
+  ) {
+    return
+  }
   await auth.logout()
   router.push('/login')
 }
@@ -29,6 +39,15 @@ async function onLogout() {
 
 <template>
   <div class="min-h-screen md:pl-56">
+    <!-- 離線提示：資料是快取、記帳會排隊補送——使用者需要知道自己在離線模式 -->
+    <div
+      v-if="!isOnline"
+      data-test="offline-banner"
+      class="bg-ink sticky top-0 z-10 py-1.5 text-center text-sm text-white"
+    >
+      離線中{{ queueCount ? `（${queueCount} 筆待送）` : '' }}
+    </div>
+
     <!-- 全域提示：置中頂部浮層 -->
     <div
       v-if="toastMessage"
@@ -43,7 +62,7 @@ async function onLogout() {
       data-test="sidebar"
       class="bg-card fixed inset-y-0 left-0 z-10 hidden w-56 flex-col gap-1 px-4 py-5 md:flex"
     >
-      <p class="text-brand-text mb-4 text-xl font-medium">分類帳</p>
+      <p class="text-brand-text mb-4 text-xl font-medium">晴空記帳</p>
       <RouterLink
         v-for="item in mainNav"
         :key="item.to"

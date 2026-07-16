@@ -3,6 +3,7 @@ import { computed, onMounted, reactive } from 'vue'
 import { RouterLink } from 'vue-router'
 import { api } from '@/api/client'
 import type { components } from '@/api/schema'
+import { loadErrorText } from '@/lib/online'
 import { createDotAssigner } from '@/lib/dots'
 import { formatAmount } from '@/lib/format'
 import Card from '@/components/ui/UiCard.vue'
@@ -111,7 +112,7 @@ function goalPercent(goal: SavingsGoalStatus): number {
   <div class="flex flex-col gap-2.5">
     <!-- ① 本月摘要 ← reports/summary/（當年當月） -->
     <Card data-test="block-summary">
-      <p v-if="summary.error" class="text-ink-2">載入失敗</p>
+      <p v-if="summary.error" class="text-ink-2">{{ loadErrorText }}</p>
       <template v-else-if="summary.data">
         <Row>
           <span class="text-ink-2">本月收入</span>
@@ -131,7 +132,7 @@ function goalPercent(goal: SavingsGoalStatus): number {
 
     <!-- ② 今日收支 ← reports/today/ -->
     <Card data-test="block-today">
-      <p v-if="today.error" class="text-ink-2">載入失敗</p>
+      <p v-if="today.error" class="text-ink-2">{{ loadErrorText }}</p>
       <template v-else-if="today.data">
         <Row>
           <span class="text-ink-2">今日支出</span>
@@ -147,7 +148,7 @@ function goalPercent(goal: SavingsGoalStatus): number {
 
     <!-- ③ 帳戶餘額 ← reports/balance/（一發拿齊，不打 accounts/） -->
     <Card data-test="block-balance">
-      <p v-if="balance.error" class="text-ink-2">載入失敗</p>
+      <p v-if="balance.error" class="text-ink-2">{{ loadErrorText }}</p>
       <template v-else-if="balance.data">
         <Row>
           <span class="text-ink-2">總資產</span>
@@ -165,7 +166,7 @@ function goalPercent(goal: SavingsGoalStatus): number {
 
     <!-- ④ 儲蓄目標 ← savings-goal-status（本月＋年度各一發） -->
     <Card data-test="block-goals">
-      <p v-if="goals.error" class="text-ink-2">載入失敗</p>
+      <p v-if="goals.error" class="text-ink-2">{{ loadErrorText }}</p>
       <template v-else-if="goals.data">
         <template
           v-for="goal in [
@@ -195,7 +196,7 @@ function goalPercent(goal: SavingsGoalStatus): number {
 
     <!-- ⑤ 最近交易 ← transactions/?page=1 取前 5 -->
     <Card data-test="block-recent" class="py-1">
-      <p v-if="recent.error" class="text-ink-2 py-2.5">載入失敗</p>
+      <p v-if="recent.error" class="text-ink-2 py-2.5">{{ loadErrorText }}</p>
       <template v-else-if="recent.data">
         <Row
           v-for="txn in recent.data"

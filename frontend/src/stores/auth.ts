@@ -69,6 +69,9 @@ export const useAuthStore = defineStore('auth', () => {
   async function logout() {
     try {
       if (refresh.value && access.value) await auth.logout(refresh.value, access.value)
+    } catch {
+      // 黑名單登記失敗（離線／伺服器掛）不得往上拋：例外會讓呼叫端的
+      // router.push('/login') 斷掉，session 已清、人卻卡在受保護頁。
     } finally {
       // Clear locally even if the blacklist call fails — the user intends to be
       // logged out; a stuck server shouldn't trap them in a session.

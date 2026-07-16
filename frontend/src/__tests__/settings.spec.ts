@@ -1,11 +1,14 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
-import { routes } from '@/router'
+import { http, HttpResponse } from 'msw'
+import { routes, authGuard } from '@/router'
 import SettingsView from '@/views/SettingsView.vue'
 import SettingsSectionView from '@/views/SettingsSectionView.vue'
 import { SETTINGS_SECTIONS } from '@/lib/settingsSections'
+import { useAuthStore } from '@/stores/auth'
+import { server } from '@/mocks/node'
 
 function freshRouter(): Router {
   return createRouter({ history: createMemoryHistory(), routes })
@@ -14,6 +17,35 @@ function freshRouter(): Router {
 beforeEach(() => {
   setActivePinia(createPinia())
   localStorage.clear()
+})
+
+describe('SettingsView 離線登出（整合：真守衛＋lazy 路由）', () => {
+  it('confirm 確定 → 一次導到 /login', async () => {
+    const auth = useAuthStore()
+    auth.user = { id: 'user-a', username: 'a', email: 'a@x.tw', role: 'member' }
+    auth.access = 't'
+    auth.refresh = 'r'
+    server.use(http.post('*/api/auth/logout/', () => HttpResponse.error()))
+
+    const router = freshRouter()
+    router.beforeEach(authGuard) // 掛真守衛，走與生產同一條導航鏈
+    await router.push('/settings')
+    const wrapper = mount(SettingsView, { global: { plugins: [router] } })
+
+    window.dispatchEvent(new Event('offline'))
+    vi.stubGlobal(
+      'confirm',
+      vi.fn<() => boolean>(() => true),
+    )
+    try {
+      await wrapper.find('[data-test="logout"]').trigger('click')
+      await flushPromises()
+      await vi.waitFor(() => expect(router.currentRoute.value.path).toBe('/login'))
+    } finally {
+      vi.unstubAllGlobals()
+      window.dispatchEvent(new Event('online'))
+    }
+  })
 })
 
 describe('SettingsView 清單', () => {

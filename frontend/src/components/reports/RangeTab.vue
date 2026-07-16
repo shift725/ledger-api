@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { api } from '@/api/client'
+import { loadErrorText } from '@/lib/online'
 import type { components } from '@/api/schema'
 import { formatAmount } from '@/lib/format'
 import Card from '@/components/ui/UiCard.vue'
@@ -76,7 +77,7 @@ const netDisplay = computed(() => {
     </div>
     <p v-if="startAfterEnd" class="text-expense text-sm">起日不可晚於迄日</p>
 
-    <p v-if="error" class="text-ink-2 py-4 text-center">載入失敗</p>
+    <p v-if="error" class="text-ink-2 py-4 text-center">{{ loadErrorText }}</p>
     <template v-else-if="result">
       <Row>
         <span class="text-ink-2">收入</span>
