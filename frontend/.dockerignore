@@ -1,0 +1,21 @@
+# build context 只需要「原始碼＋依賴宣告」，其餘一律擋在外面。
+# 最關鍵的是 node_modules：host 是 Windows，裡面的原生二進位（esbuild／rollup／oxide／
+# lightningcss）認的是 Windows，複製進 Linux 容器只會在 build 時炸——一律讓容器自己 npm ci。
+
+node_modules/
+dist/
+
+# host 端的工具產物：容器內重跑會自己生，帶進去只是拖慢 context 傳輸
+.lighthouseci/
+.eslintcache
+coverage/
+*.tsbuildinfo
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# Docker 自身
+Dockerfile
+.dockerignore

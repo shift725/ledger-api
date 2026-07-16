@@ -82,6 +82,26 @@ services:
     depends_on: *celery-deps
     restart: unless-stopped
 
+  # nginx 服 Vue 的建置產物，並把 /api 反代給 web——瀏覽器只需要這一個 port，
+  # 前後端同源，CORS 這整類問題自始不存在。image 內只有 nginx＋靜態檔（見 frontend/Dockerfile）。
+  frontend:
+    build: ./frontend
+    depends_on:
+      # 等 web 健康再起：nginx 啟動當下反代目標就已經活著，不會有開站頭幾秒的 502。
+      web:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    healthcheck:
+      # nginx alpine 無 curl，用 busybox 內建的 wget（-q -O- 丟棄輸出，非 2xx 即 exit 非 0）。
+      # 位址寫 127.0.0.1 不寫 localhost：容器的 /etc/hosts 讓 localhost 同時指向 ::1 與
+      # 127.0.0.1，wget 會先試 IPv6 而 nginx 只聽 IPv4（listen 80）→ 檢查必敗。
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
   # ------------------------------------------------------------
   # TLS profile — only started with `docker compose --profile tls up`
   # ------------------------------------------------------------
