@@ -1,0 +1,65 @@
+name: E2E
+
+# 手動觸發為主：E2E 起全棧要幾分鐘，不掛進每支 PR 的必經之路。
+# pull_request 只在動到 E2E 自身檔案時跑——改測試的 PR 自己證明自己是綠的，
+# 其餘 PR 完全不受影響；本 workflow 不是 required check。
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - frontend/e2e/**
+      - frontend/playwright.config.ts
+      - .github/workflows/e2e.yml
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # compose 需要 .env（env_file＋變數插值）；範例檔的值本就是拋棄式起步值，
+      # CI 的臨時棧直接沿用（跑完即毀，無機密）。
+      - name: 準備環境變數
+        run: cp .env.example .env
+
+      # -f 明指 base compose：略過 dev 用的 override（bind mount＋db 對外 port）——
+      # 這裡要驗的是 image 裡真正烤進去的東西，不是掛在上面的 checkout。
+      # --wait 等所有 healthcheck 全過才放行，等不到就以非零收場。
+      - name: 起容器全棧
+        run: docker compose -f docker-compose.yml up -d --build --wait --wait-timeout 300
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 安裝依賴（npm ci，嚴格照 lockfile）
+        run: npm ci
+        working-directory: frontend
+
+      # --with-deps 連瀏覽器的系統相依（共享庫、字型）一起裝——runner 是裸 ubuntu。
+      - name: 安裝 Playwright 瀏覽器
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+
+      - name: E2E 煙測
+        run: npm run test:e2e
+        working-directory: frontend
+
+      # trace 不論紅綠都上傳：紅的更需要留證（trace 可逐步回放每個動作與網路）。
+      - name: 上傳 trace 與報告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts
+          path: |
+            frontend/test-results/
+            frontend/playwright-report/
+          retention-days: 14
+
+      # 測試紅時倒出各 service 日誌：瀏覽器端有 trace、伺服器端有 log，兩面夾攻。
+      - name: 傾印容器日誌（僅失敗時）
+        if: failure()
+        run: docker compose -f docker-compose.yml logs --tail 200

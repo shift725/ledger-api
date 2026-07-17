@@ -38,5 +38,9 @@ __screenshots__/
 # Vite
 *.timestamp-*-*.mjs
 
-# Lighthouse CI ¥»¾÷¿é¥X
+# Lighthouse CI ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½X
 .lighthouseci/
+
+# Playwright
+test-results/
+playwright-report/
