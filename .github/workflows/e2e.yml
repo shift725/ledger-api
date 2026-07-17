@@ -51,7 +51,7 @@ jobs:
       # trace 不論紅綠都上傳：紅的更需要留證（trace 可逐步回放每個動作與網路）。
       - name: 上傳 trace 與報告
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-artifacts
           path: |
