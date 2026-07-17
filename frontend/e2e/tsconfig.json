@@ -1,0 +1,13 @@
+// E2E 測試跑在 Node 環境（Playwright test runner），不是瀏覽器 bundle——
+// 型別基底與 tsconfig.node.json 同款；由根 tsconfig references 納入 vue-tsc --build。
+{
+  "extends": "@tsconfig/node24/tsconfig.json",
+  "include": ["./**/*"],
+  "compilerOptions": {
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "noEmit": true,
+    "tsBuildInfoFile": "../node_modules/.tmp/tsconfig.e2e.tsbuildinfo"
+  }
+}
