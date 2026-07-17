@@ -42,8 +42,36 @@
   --dot-10: #d62f8c;
 }
 
+/*
+  深色模式：跟隨系統偏好（prefers-color-scheme），只換 token 值＝全站翻色——
+  層次以色階與留白為主、陰影極輕，當初就是為了這次平移。所有文字配對經 WCAG
+  驗算 ≥4.5:1、鈕面等非文字 ≥3:1。
+  未列出的 --color-brand-fill 亮暗共用：白字對鈕面 4.9:1，與頁面模式無關。
+  色點色盤（--dot-*）沿用亮版：作 accent 非正文，深底下可辨。
+*/
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #201d17;
+    --color-card: #2a271f;
+    --color-ink: #ece7da;
+    --color-ink-2: #b3aa97;
+    --color-hairline: #3a362b;
+    --color-frame: #474130;
+    --color-brand-text: #58b9e0;
+    --color-brand-tint: #123243;
+    --color-income: #57bd8a;
+    --color-expense: #e0796f;
+    --color-track: #262319;
+  }
+}
+
 /* 系統字疊（中文 webfont 動輒數 MB，不載）＋全域等寬數字（金額對齊） */
 @layer base {
+  /* 原生控件（select/datetime-local/dialog/捲軸）跟著模式走，不用逐一補樣式 */
+  :root {
+    color-scheme: light dark;
+  }
+
   body {
     min-height: 100vh;
     background: var(--color-bg);

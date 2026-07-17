@@ -317,7 +317,7 @@ onMounted(async () => {
       <button
         type="button"
         data-test="confirm-delete"
-        class="bg-expense rounded-lg px-3 py-1.5 text-sm text-white"
+        class="bg-expense dark:text-bg rounded-lg px-3 py-1.5 text-sm text-white"
         @click="confirmDelete"
       >
         刪除
