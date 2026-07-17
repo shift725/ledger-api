@@ -35,9 +35,9 @@ jobs:
       DATABASE_URL: postgres://ledger:ci-postgres-password@localhost:5432/ledger
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip                       # 快取 pip 下載，第二次跑更快
@@ -70,9 +70,9 @@ jobs:
         working-directory: frontend
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: frontend/.nvmrc          # 與本機 .nvmrc 同一版
           cache: npm
