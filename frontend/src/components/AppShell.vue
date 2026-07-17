@@ -43,7 +43,7 @@ async function onLogout() {
     <div
       v-if="!isOnline"
       data-test="offline-banner"
-      class="bg-ink sticky top-0 z-10 py-1.5 text-center text-sm text-white"
+      class="bg-ink text-bg sticky top-0 z-10 py-1.5 text-center text-sm"
     >
       離線中{{ queueCount ? `（${queueCount} 筆待送）` : '' }}
     </div>

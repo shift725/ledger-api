@@ -61,14 +61,26 @@ export function balanceRows(accounts: BalanceHistoryAccount[]): BalanceRow[] {
   }))
 }
 
+// Chart.js 的軸字/圖例/格線色是寫死的預設（#666、rgba(0,0,0,.1)），不吃 CSS 變數，
+// 深色下直接不可讀 → 產生選項時經 resolveCssVar 餵 token（亮色下 ink-2 ≈ 原預設，
+// 視覺不變）。取值時機＝options 建立；OS 主題熱切換時已掛載圖表不重著色，離頁再進即正確。
+function chartTheme() {
+  return {
+    text: resolveCssVar('var(--color-ink-2)'),
+    grid: resolveCssVar('var(--color-hairline)'),
+    surface: resolveCssVar('var(--color-card)'),
+  }
+}
+
 // 走勢圖選項：y 軸刻度與 tooltip 皆走 formatAmount（tooltip 取繪圖 float，精度邊界同上）。
 export function lineChartOptions(): ChartOptions<'line'> {
+  const theme = chartTheme()
   return {
     responsive: true,
     maintainAspectRatio: false,
     interaction: { mode: 'index', intersect: false },
     plugins: {
-      legend: { position: 'bottom' },
+      legend: { position: 'bottom', labels: { color: theme.text } },
       tooltip: {
         callbacks: {
           label: (ctx) => `${ctx.dataset.label}: ${formatAmount(String(ctx.parsed.y))}`,
@@ -76,7 +88,11 @@ export function lineChartOptions(): ChartOptions<'line'> {
       },
     },
     scales: {
-      y: { ticks: { callback: (v) => formatAmount(String(v)) } },
+      x: { ticks: { color: theme.text }, grid: { color: theme.grid } },
+      y: {
+        ticks: { color: theme.text, callback: (v) => formatAmount(String(v)) },
+        grid: { color: theme.grid },
+      },
     },
   }
 }
@@ -144,11 +160,14 @@ export function toTagBar(breakdown: TagBreakdown, flow: Flow): ChartData<'bar'> 
 }
 
 export function doughnutChartOptions(): ChartOptions<'doughnut'> {
+  const theme = chartTheme()
   return {
     responsive: true,
     maintainAspectRatio: false,
+    // 切片邊線預設純白，深色卡面上會出白縫 → 跟卡面同色
+    elements: { arc: { borderColor: theme.surface } },
     plugins: {
-      legend: { position: 'bottom' },
+      legend: { position: 'bottom', labels: { color: theme.text } },
       tooltip: {
         callbacks: { label: (ctx) => `${ctx.label}: ${formatAmount(String(ctx.parsed))}` },
       },
@@ -157,6 +176,7 @@ export function doughnutChartOptions(): ChartOptions<'doughnut'> {
 }
 
 export function barChartOptions(): ChartOptions<'bar'> {
+  const theme = chartTheme()
   return {
     indexAxis: 'y',
     responsive: true,
@@ -166,7 +186,11 @@ export function barChartOptions(): ChartOptions<'bar'> {
       tooltip: { callbacks: { label: (ctx) => formatAmount(String(ctx.parsed.x)) } },
     },
     scales: {
-      x: { ticks: { callback: (v) => formatAmount(String(v)) } },
+      x: {
+        ticks: { color: theme.text, callback: (v) => formatAmount(String(v)) },
+        grid: { color: theme.grid },
+      },
+      y: { ticks: { color: theme.text }, grid: { color: theme.grid } },
     },
   }
 }

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import {
   resolveCssVar,
   toBalanceHistoryChart,
@@ -7,6 +7,9 @@ import {
   balanceRows,
   categoryRows,
   tagRows,
+  lineChartOptions,
+  doughnutChartOptions,
+  barChartOptions,
 } from '@/lib/reportCharts'
 
 describe('resolveCssVar', () => {
@@ -102,6 +105,40 @@ describe('toTagBar', () => {
 
   it('收入別全 0 → 空（供空態判斷）', () => {
     expect(toTagBar(breakdown, 'income').labels).toEqual([])
+  })
+})
+
+describe('圖表選項跟隨主題 token（Chart.js 預設灰字寫死，深色下不可讀）', () => {
+  // 探針值：模擬 :root 上的 token——選項若真經 resolveCssVar 取值，就會拿到實色。
+  // 必須 beforeAll/afterAll 收乾淨：其他 describe 斷言的是「無樣式環境原樣回傳 var 字串」。
+  const probes: Array<[string, string]> = [
+    ['--color-ink-2', '#6b6557'],
+    ['--color-hairline', '#f0ebdd'],
+    ['--color-card', '#ffffff'],
+  ]
+  beforeAll(() => probes.forEach(([k, v]) => document.documentElement.style.setProperty(k, v)))
+  afterAll(() => probes.forEach(([k]) => document.documentElement.style.removeProperty(k)))
+
+  it('折線圖：軸字/圖例＝ink-2、格線＝hairline', () => {
+    const o = lineChartOptions()
+    expect(o.plugins?.legend?.labels?.color).toBe('#6b6557')
+    expect(o.scales?.x?.ticks?.color).toBe('#6b6557')
+    expect(o.scales?.y?.ticks?.color).toBe('#6b6557')
+    expect(o.scales?.x?.grid?.color).toBe('#f0ebdd')
+    expect(o.scales?.y?.grid?.color).toBe('#f0ebdd')
+  })
+
+  it('環圈圖：圖例＝ink-2、切片邊線＝card（深色下不出白縫）', () => {
+    const o = doughnutChartOptions()
+    expect(o.plugins?.legend?.labels?.color).toBe('#6b6557')
+    expect(o.elements?.arc?.borderColor).toBe('#ffffff')
+  })
+
+  it('橫條圖：兩軸字色＝ink-2、格線＝hairline', () => {
+    const o = barChartOptions()
+    expect(o.scales?.x?.ticks?.color).toBe('#6b6557')
+    expect(o.scales?.y?.ticks?.color).toBe('#6b6557')
+    expect(o.scales?.x?.grid?.color).toBe('#f0ebdd')
   })
 })
 
