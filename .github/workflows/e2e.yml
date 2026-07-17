@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # compose 需要 .env（env_file＋變數插值）；範例檔的值本就是拋棄式起步值，
       # CI 的臨時棧直接沿用（跑完即毀，無機密）。
@@ -29,7 +29,7 @@ jobs:
       - name: 起容器全棧
         run: docker compose -f docker-compose.yml up -d --build --wait --wait-timeout 300
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: frontend/.nvmrc
           cache: npm
@@ -51,7 +51,7 @@ jobs:
       # trace 不論紅綠都上傳：紅的更需要留證（trace 可逐步回放每個動作與網路）。
       - name: 上傳 trace 與報告
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: playwright-artifacts
           path: |
