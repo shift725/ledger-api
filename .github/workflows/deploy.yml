@@ -1,0 +1,78 @@
+name: Deploy
+
+# 發佈管線：main 每次 merge 自動 build 前後端兩顆 image push 上 GHCR——
+# 部署的必須是 CI 驗過的那顆 artifact（build once, deploy the same artifact），
+# 主機端從此只 pull 不 build。自動部署日後在本檔以 needs: 接續 build-push，
+# 一次 merge＝一頁 log 從 build 到上線全可見。
+on:
+  push:
+    branches: [main]
+  # 手動補發佈（例如誤刪 package 後重建）；跑的內容與 push main 完全相同。
+  workflow_dispatch:
+  # 動到管線自身或 build 輸入的 PR：先實跑 build 自證（不 push）——
+  # 否則本 workflow 的第一次實測會落在 merge 後的 main 上（e2e.yml 同手法）。
+  pull_request:
+    paths:
+      - .github/workflows/deploy.yml
+      - Dockerfile
+      - .dockerignore
+      - frontend/Dockerfile
+      - frontend/.dockerignore
+
+# image 名收斂一處。巢狀路徑「repo/服務」自我說明；
+# web 這顆同時供 worker/beat 使用（compose 三個 service 同一個 build: .）。
+env:
+  WEB_IMAGE: ghcr.io/shift725/ledger-api/web
+  FRONTEND_IMAGE: ghcr.io/shift725/ledger-api/frontend
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+
+    # GITHUB_TOKEN 收到本 job 的最小需求：讀 checkout、寫 packages。
+    # 這是 workflow 執行期的短命 token（job 結束即失效）——不辦 PAT、無長期憑證。
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # GHA cache（type=gha）只有 buildx driver 支援，docker 預設 driver 不行。
+      - uses: docker/setup-buildx-action@v4
+
+      # 只在會 push 的 run 登入：PR run 不 push、不需憑證＝零暴露。
+      - name: 登入 GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 雙 tag：latest＝日常部署預設（會漂移）；sha-<commit>＝不可變的 rollback 錨點。
+      # cache 兩顆各自分倉（scope）——共用預設倉會互相清洗、cache 永遠 miss。
+      # label 把 package 連回 repo（GHCR 頁面顯示來源）。
+      - name: Build＋push web image（worker/beat 共用）
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ env.WEB_IMAGE }}:latest
+            ${{ env.WEB_IMAGE }}:sha-${{ github.sha }}
+          labels: org.opencontainers.image.source=https://github.com/shift725/ledger-api
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
+      - name: Build＋push frontend image
+        uses: docker/build-push-action@v7
+        with:
+          context: ./frontend
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ env.FRONTEND_IMAGE }}:latest
+            ${{ env.FRONTEND_IMAGE }}:sha-${{ github.sha }}
+          labels: org.opencontainers.image.source=https://github.com/shift725/ledger-api
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
