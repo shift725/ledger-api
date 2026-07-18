@@ -1,17 +1,40 @@
 # prod overlay：與 base 疊用——
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
-# 本檔只寫「image 來源」差分：服務骨架（env、depends_on、healthcheck…）的
-# 單一真相在 docker-compose.yml，本檔單獨跑不起來、也不該單獨跑。
+# 本檔寫「image 來源」＋「prod 的 port/TLS 拓撲」差分；服務骨架（env、depends_on、healthcheck…）
+# 的單一真相在 docker-compose.yml，本檔單獨跑不起來、也不該單獨跑。
 # （dev 不帶 -f 時 compose 自動疊的是 docker-compose.override.yml，與本檔無關。）
 # rollback：IMAGE_TAG=sha-<commit> 重新 up——sha tag 不可變，永遠指向當時那份產物。
+# tls profile（edge nginx＋certbot）由 prod .env 的 COMPOSE_PROFILES=tls 啟用。
 x-web-image: &web-image
   # web/worker/beat 本就共用同一顆 image（base 裡三者同一個 build: .）
   image: ghcr.io/shift725/ledger-api/web:${IMAGE_TAG:-latest}
 
 services:
-  web: *web-image
+  web:
+    <<: *web-image
+    # prod 不對外開 8000：docker publish 走 iptables DNAT、繞過 ufw，「防火牆有擋」是錯覺，
+    # 唯一正解是不 publish。對外流量只從 edge nginx（443）進來，內網容器仍連得到 web:8000。
+    ports: !reset []
   worker: *web-image
   beat: *web-image
   frontend:
     image: ghcr.io/shift725/ledger-api/frontend:${IMAGE_TAG:-latest}
+    # 同理：prod 由 edge 內部反代 frontend，不對外開 80。
+    ports: !reset []
+
+  nginx:
+    # 等 frontend 健康再起：edge 一啟動反代目標就已經活著，避免開站頭幾秒的 502。
+    # （base 的 nginx depends_on web；frontend 本就 depends_on web healthy，故等到 frontend
+    #   healthy 時 web 必已 healthy——這裡補的是「edge→frontend」這一層的順序。）
+    depends_on:
+      frontend:
+        condition: service_healthy
+    # certbot 續簽只換磁碟上的憑證檔，nginx 不 reload 不會吃新證 → 背景每 6h reload 一次。
+    # 覆寫的是 entrypoint 不是 command：官方 entrypoint 只在 $1=="nginx" 時才跑 envsubst
+    # （把 ${DOMAIN_NAME} 模板填進 conf.d），所以最後仍 exec 官方 entrypoint 帶 nginx，
+    # 模板處理不被跳過；reload loop 先背景化再 exec，兩者並存。
+    entrypoint:
+      - /bin/sh
+      - -c
+      - "(while :; do sleep 6h; nginx -s reload; done) & exec /docker-entrypoint.sh nginx -g 'daemon off;'"

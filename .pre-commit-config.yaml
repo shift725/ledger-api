@@ -15,6 +15,9 @@ repos:
         args: [--markdown-linebreak-ext=md]   # 保留 Markdown 行尾雙空格硬換行
       - id: end-of-file-fixer
       - id: check-yaml
+        # docker-compose.prod.yml 用 compose 自訂標籤 !reset，check-yaml 的 safe_load
+        # 認不得構造器會報錯 → --unsafe 只驗 YAML 語法、不建構物件（官方對自訂標籤的建議）。
+        args: [--unsafe]
       - id: check-merge-conflict
       - id: check-added-large-files
   # 前端 lint/format：官方 eslint/prettier pre-commit mirror 已 archived，
