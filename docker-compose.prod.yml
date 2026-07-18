@@ -1,0 +1,17 @@
+# prod overlay：與 base 疊用——
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
+# 本檔只寫「image 來源」差分：服務骨架（env、depends_on、healthcheck…）的
+# 單一真相在 docker-compose.yml，本檔單獨跑不起來、也不該單獨跑。
+# （dev 不帶 -f 時 compose 自動疊的是 docker-compose.override.yml，與本檔無關。）
+# rollback：IMAGE_TAG=sha-<commit> 重新 up——sha tag 不可變，永遠指向當時那份產物。
+x-web-image: &web-image
+  # web/worker/beat 本就共用同一顆 image（base 裡三者同一個 build: .）
+  image: ghcr.io/shift725/ledger-api/web:${IMAGE_TAG:-latest}
+
+services:
+  web: *web-image
+  worker: *web-image
+  beat: *web-image
+  frontend:
+    image: ghcr.io/shift725/ledger-api/frontend:${IMAGE_TAG:-latest}
