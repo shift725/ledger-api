@@ -19,7 +19,9 @@ server {
     }
 }
 
-# HTTPS — reverse proxy to Django/gunicorn
+# HTTPS — TLS termination, then reverse proxy everything to the frontend nginx.
+# edge 只做一件事：解 TLS。路由（SPA vs /api vs /admin）全交給 frontend/nginx.conf 一處決定，
+# 這樣 frontend image 環境無關（dev 直連、prod 躲 edge 後都是同一顆），edge 是啞的 TLS 終止器。
 server {
     listen      443 ssl;
     listen [::]:443 ssl;
@@ -35,10 +37,18 @@ server {
 
     client_max_body_size 10m;
 
+    # 反代目標寫成變數＋Docker 內建 DNS（127.0.0.11）：每次部署重建 frontend 會換 IP，
+    # 寫死主機名的話 nginx 只在啟動解析一次、之後一直打舊 IP（同 frontend/nginx.conf 的做法）。
+    # 帶變數後 proxy_pass 不自動接路徑，須明寫 $request_uri。
+    resolver 127.0.0.11 valid=10s;
+    set $upstream http://frontend:80;
+
     location / {
-        proxy_pass         http://web:8000;
+        proxy_pass         $upstream$request_uri;
         proxy_http_version 1.1;
-        proxy_set_header   Host              $host;
+        # 此 server 聽 443 ssl → $scheme 恆為 https：edge 是第一跳，由它權威地斷言原始協定。
+        # $http_host 保留 port，讓 DRF 分頁的絕對連結指得回瀏覽器實際位址。
+        proxy_set_header   Host              $http_host;
         proxy_set_header   X-Real-IP         $remote_addr;
         proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header   X-Forwarded-Proto $scheme;
