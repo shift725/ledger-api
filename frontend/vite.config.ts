@@ -40,9 +40,11 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // SPA 導航離線時 fallback 到 index.html，但 /api 絕不能被吃掉——
-        // API 回應一律走網路、不進 SW 快取（多用戶隔離由 app 層 localStorage 負責）。
-        navigateFallbackDenylist: [/^\/api/],
+        // SPA 導航離線時 fallback 到 index.html，但這些路徑由伺服器（Django）處理、
+        // 絕不能被 SW 攔去回 SPA 殼：/api（JSON API）、/admin（Django admin，同源反代）、
+        // /static（admin/DRF 靜態檔）。少了 admin/static，瀏覽器導航到 /admin 會被 SW
+        // 餵 index.html → 只剩空殼（nginx 已把它們反代給 web，兩處排除須一致）。
+        navigateFallbackDenylist: [/^\/api/, /^\/admin/, /^\/static/],
       },
     }),
   ],
