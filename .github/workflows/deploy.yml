@@ -90,11 +90,15 @@ jobs:
   deploy:
     needs: build-push
     # 部署只在 push main／dispatch 跑，PR 絕不碰 prod。
-    # 引用 needs.*.result 會停用預設的 success() 閘 → 得自己列出兩種放行狀態：
-    # build 成功（平時）或 build 被跳過（rollback）；build 真的失敗則不部署。
+    # !cancelled() 是關鍵：job 的 if 只要不含狀態函式，GHA 會隱含補一個 success()——
+    # rollback 時 build-push 被 skip，那個隱含 success() 判否直接擋掉 deploy（連下面
+    # result=='skipped' 都來不及生效，三個 job 會全灰）。用 !cancelled() 關掉隱含閘後，
+    # 才輪到自己列放行狀態：build 成功（平時）或被跳過（rollback）；build 真失敗則不部署。
+    # if 值以 ! 開頭會被 YAML 當 tag → 必須包 ${{ }}。
     if: >-
-      github.event_name != 'pull_request'
-      && (needs.build-push.result == 'success' || needs.build-push.result == 'skipped')
+      ${{ !cancelled()
+      && github.event_name != 'pull_request'
+      && (needs.build-push.result == 'success' || needs.build-push.result == 'skipped') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
