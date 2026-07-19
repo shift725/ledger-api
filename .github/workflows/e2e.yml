@@ -3,8 +3,17 @@ name: E2E
 # 手動觸發為主：E2E 起全棧要幾分鐘，不掛進每支 PR 的必經之路。
 # pull_request 只在動到 E2E 自身檔案時跑——改測試的 PR 自己證明自己是綠的，
 # 其餘 PR 完全不受影響；本 workflow 不是 required check。
+# workflow_call：部署後 smoke 複用本煙測——deploy.yml 傳 base_url 打正式站，
+# 空 base_url（含 dispatch／PR 事件，無此 input）維持原本地棧行為。
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      base_url:
+        description: 打哪一站；留空＝起本地容器棧自打
+        type: string
+        required: false
+        default: ''
   pull_request:
     paths:
       - frontend/e2e/**
@@ -18,16 +27,28 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # 下兩步只在「本地棧模式」（base_url 空，含 dispatch／PR 事件）跑；
+      # 遠端站模式（部署後 smoke）跳過起棧、改打傳入的 URL。
       # compose 需要 .env（env_file＋變數插值）；範例檔的值本就是拋棄式起步值，
       # CI 的臨時棧直接沿用（跑完即毀，無機密）。
       - name: 準備環境變數
+        if: inputs.base_url == ''
         run: cp .env.example .env
 
       # -f 明指 base compose：略過 dev 用的 override（bind mount＋db 對外 port）——
       # 這裡要驗的是 image 裡真正烤進去的東西，不是掛在上面的 checkout。
       # --wait 等所有 healthcheck 全過才放行，等不到就以非零收場。
       - name: 起容器全棧
+        if: inputs.base_url == ''
         run: docker compose -f docker-compose.yml up -d --build --wait --wait-timeout 300
+
+      # 遠端站模式：把目標站寫進 job 環境給煙測；空值不設，playwright 落自己的預設 127.0.0.1
+      # （單一預設來源＝playwright.config）。用 env 中轉不直接把 input 內插進 shell（injection 慣例）。
+      - name: 指向遠端站
+        if: inputs.base_url != ''
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+        run: echo "E2E_BASE_URL=$BASE_URL" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v5
         with:
@@ -60,6 +81,7 @@ jobs:
           retention-days: 14
 
       # 測試紅時倒出各 service 日誌：瀏覽器端有 trace、伺服器端有 log，兩面夾攻。
+      # 遠端站模式沒有本地棧可倒，故一併以 base_url 空為條件。
       - name: 傾印容器日誌（僅失敗時）
-        if: failure()
+        if: failure() && inputs.base_url == ''
         run: docker compose -f docker-compose.yml logs --tail 200

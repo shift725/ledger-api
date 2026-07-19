@@ -1,14 +1,22 @@
 name: Deploy
 
-# 發佈管線：main 每次 merge 自動 build 前後端兩顆 image push 上 GHCR——
+# 發佈＋部署管線：main 每次 merge → build 前後端兩顆 image push 上 GHCR →
+# SSH 進主機 pull＋起棧 → 部署後 smoke（輕＝公網 curl，重＝E2E 打真站）。
 # 部署的必須是 CI 驗過的那顆 artifact（build once, deploy the same artifact），
-# 主機端從此只 pull 不 build。自動部署日後在本檔以 needs: 接續 build-push，
-# 一次 merge＝一頁 log 從 build 到上線全可見。
+# 主機端只 pull 不 build。一次 merge＝一頁 log 從 build 到上線全可見。
+# rollback＝workflow_dispatch 填舊 sha tag（見 image_tag input）。
 on:
   push:
     branches: [main]
-  # 手動補發佈（例如誤刪 package 後重建）；跑的內容與 push main 完全相同。
+  # 手動觸發＝①誤刪 package 後重新發佈（image_tag 留空，等同 push main）
+  #           ②rollback（image_tag 填既有 sha tag → 跳過 build、直接部署該版）。
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'rollback：填既有 image tag（如 sha-abc123…）直接部署該版、跳過 build；留空＝build＋部署當前 main'
+        type: string
+        required: false
+        default: ''
   # 動到管線自身或 build 輸入的 PR：先實跑 build 自證（不 push）——
   # 否則本 workflow 的第一次實測會落在 merge 後的 main 上（e2e.yml 同手法）。
   pull_request:
@@ -26,7 +34,9 @@ env:
   FRONTEND_IMAGE: ghcr.io/shift725/ledger-api/frontend
 
 jobs:
+  # rollback（dispatch 帶 image_tag）時整個 build 跳過——直接部署 registry 上那顆不可變的舊 image。
   build-push:
+    if: github.event_name != 'workflow_dispatch' || inputs.image_tag == ''
     runs-on: ubuntu-latest
 
     # GITHUB_TOKEN 收到本 job 的最小需求：讀 checkout、寫 packages。
@@ -76,3 +86,89 @@ jobs:
           labels: org.opencontainers.image.source=https://github.com/shift725/ledger-api
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,mode=max,scope=frontend
+
+  deploy:
+    needs: build-push
+    # 部署只在 push main／dispatch 跑，PR 絕不碰 prod。
+    # 引用 needs.*.result 會停用預設的 success() 閘 → 得自己列出兩種放行狀態：
+    # build 成功（平時）或 build 被跳過（rollback）；build 真的失敗則不部署。
+    if: >-
+      github.event_name != 'pull_request'
+      && (needs.build-push.result == 'success' || needs.build-push.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # 部署序列化：兩支 PR 接連 merge 不會兩個部署互踩（cancel-in-progress: false＝進行中的不砍、
+    # 後到的排隊；GHA 只保最新一個 pending，對線性 main＝最新版覆蓋前版，正確）。
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # 金鑰＋known_hosts 落檔；host/user 收進 ssh config，後續只用別名 deploy-target。
+      # known_hosts 由 secret 帶入＝主機指紋釘死（絕不 StrictHostKeyChecking=no／MITM 門戶大開）。
+      - name: 佈署連線設定
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/deploy_key
+          {
+            echo "Host deploy-target"
+            echo "  HostName $DEPLOY_HOST"
+            echo "  User $DEPLOY_USER"
+            echo "  IdentityFile ~/.ssh/deploy_key"
+            echo "  IdentitiesOnly yes"
+            echo "  UserKnownHostsFile ~/.ssh/known_hosts"
+          } > ~/.ssh/config
+
+      # 部署本體：Secrets→.env、備份主機舊 .env、傳 compose＋edge 模板＋.env、pull、起棧等健康。
+      - name: 部署到主機
+        env:
+          DEPLOY_ENV_FILE: ${{ secrets.DEPLOY_ENV_FILE }}
+          # 一律釘不可變 sha tag：rollback＝input 指定的舊 sha；平時＝本 commit。
+          IMAGE_TAG: ${{ inputs.image_tag || format('sha-{0}', github.sha) }}
+        run: |
+          # .env：GitHub Secrets 為唯一正本 render 到主機；IMAGE_TAG 由本 run 追加為唯一來源
+          # （不放進 secret，免 dotenv「後行覆蓋前行」的歧義）。
+          printf '%s\n' "$DEPLOY_ENV_FILE" > .env.deploy
+          echo "IMAGE_TAG=$IMAGE_TAG" >> .env.deploy
+          # 主機現有 .env 先留一份 .bak（首次轉正若 secret 抄錯的救生索；正本仍是 Secrets）。
+          ssh deploy-target 'cp /srv/ledger-api/.env /srv/ledger-api/.env.bak 2>/dev/null || true'
+          # repo＝單一真實來源：compose×2＋docker/（只 docker/nginx 被 bind-mount，entrypoint.sh
+          # 已烤進 image、隨附無害）＋新 .env 一起送上主機。
+          scp docker-compose.yml docker-compose.prod.yml deploy-target:/srv/ledger-api/
+          scp -r docker deploy-target:/srv/ledger-api/
+          scp .env.deploy deploy-target:/srv/ledger-api/.env
+          # pull 那顆 CI 驗過的 image → --no-build 起棧（主機無 build context，只認 pulled image）
+          # → --wait 等 healthcheck 全過，等不到（如壞 .env 讓 web 永不 healthy）即非零收場。
+          ssh deploy-target 'cd /srv/ledger-api && docker compose -f docker-compose.yml -f docker-compose.prod.yml pull && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build --wait --wait-timeout 300'
+
+      # 輕 smoke：runner 打公網真站，順帶驗 DNS→TLS→edge→frontend→web 整條鏈路。
+      # --retry-all-errors 蓋過 edge 剛 reload 的短暫空窗；-f 讓 HTTP 4xx/5xx 也算失敗。
+      - name: 輕量 smoke（公網）
+        run: |
+          curl --retry 5 --retry-delay 5 --retry-all-errors -fsS https://shift725-ledger-api.duckdns.org/healthz
+          echo
+          curl --retry 5 --retry-delay 5 --retry-all-errors -fsS -o /dev/null https://shift725-ledger-api.duckdns.org/
+
+      # 清舊 image 回收磁碟——排在 smoke 之後：smoke 沒過這步不執行，上一顆 image 留主機本地
+      # ＝最快的手動回滾窗（正式 rollback 仍走 dispatch 從 GHCR 重拉不可變 sha）。
+      - name: 清理主機舊 image
+        run: ssh deploy-target 'docker image prune -af'
+
+  # 重 smoke：部署後拿 E2E 打真站跑完整命脈——base_url 早設計成可換，這裡複用同一套煙測打正式站。
+  # 復用 e2e.yml（workflow_call）＝單一來源，不在此重抄 node/playwright 安裝一整串。
+  # needs: deploy 的預設 success() 閘＝deploy skip（PR）或紅則本 job 自動跳過。
+  smoke-e2e:
+    needs: deploy
+    uses: ./.github/workflows/e2e.yml
+    with:
+      base_url: https://shift725-ledger-api.duckdns.org
