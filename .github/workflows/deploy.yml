@@ -170,9 +170,12 @@ jobs:
 
   # 重 smoke：部署後拿 E2E 打真站跑完整命脈——base_url 早設計成可換，這裡複用同一套煙測打正式站。
   # 復用 e2e.yml（workflow_call）＝單一來源，不在此重抄 node/playwright 安裝一整串。
-  # needs: deploy 的預設 success() 閘＝deploy skip（PR）或紅則本 job 自動跳過。
+  # if 同 deploy 的道理：build-push 被 skip（rollback）時 skip 會沿 needs 鏈往下傳染，
+  # 光靠 needs: deploy 的隱含 success() 擋不住（deploy 成功也沒用）→ 本 job 也得 !cancelled()
+  # 自解隱含閘，再顯式要求 deploy 成功才驗（PR／deploy 紅則 result!=success→跳過）。
   smoke-e2e:
     needs: deploy
+    if: ${{ !cancelled() && needs.deploy.result == 'success' }}
     uses: ./.github/workflows/e2e.yml
     with:
       base_url: https://shift725-ledger-api.duckdns.org
