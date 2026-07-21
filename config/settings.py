@@ -13,7 +13,7 @@ ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='', cast=Csv())
 
 # 反代信任三件套：站在 TLS 終止 proxy（edge nginx）後方時才開；預設關 → dev/CI/測試零改變。
 TLS_BEHIND_PROXY = config('TLS_BEHIND_PROXY', default=False, cast=bool)
-if TLS_BEHIND_PROXY:
+if TLS_BEHIND_PROXY:  # pragma: no cover
     # 信任 edge 標的 X-Forwarded-Proto：有它 request.is_secure() 才會真、DRF 分頁才生 https
     # 絕對連結。edge 是唯一入口且會覆寫此 header，內網無法偽造；dev/CI 無 edge 故不能開，
     # 否則任何 client 自稱 https 即可讓 Django 把明文連線當安全的。

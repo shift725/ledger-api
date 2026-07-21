@@ -2,9 +2,11 @@
 
 [![CI](https://github.com/shift725/ledger-api/actions/workflows/ci.yml/badge.svg)](https://github.com/shift725/ledger-api/actions/workflows/ci.yml)
 
+**線上 demo**：<https://shift725-ledger-api.duckdns.org>
+
 記帳 REST API 作品：以 Django REST Framework + SimpleJWT 打底的後端服務。
 
-目前已完成**帳號與認證核心**（註冊、登入、登出、JWT 管理、使用者查詢）；**記帳領域**（帳戶、分類、交易、標籤）為進行中的下一階段。本文件說明如何用 Docker 在本機跑起來、如何在本機直接開發，以及如何部署到單一 Linux VM 並啟用 HTTPS。
+後端**認證核心**與完整**記帳領域**（帳戶、分類、交易、標籤、報表、定期定額）皆已完成，並有 **Vue 3 PWA 前端**與 **GitHub Actions CI/CD 自動部署**——站已上線（見上方線上 demo）。本文件說明如何用 Docker 在本機跑起來、如何在本機直接開發，以及如何部署到單一 Linux VM 並啟用 HTTPS（從零重建的完整部署手冊見 [`DEPLOYMENT.md`](DEPLOYMENT.md)）。
 
 ---
 
