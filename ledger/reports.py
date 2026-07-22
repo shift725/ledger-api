@@ -181,9 +181,13 @@ def balance_history(user):
     """每帳戶的逐月餘額序列（連續月份、缺月沿用前值 forward-fill）。固定 2 查詢。
 
     查詢① 帳戶清單、查詢② 每帳戶每月淨變化（TruncMonth 當前時區歸月、GROUP BY）；
-    Python 端 per-account 累加 running sum 並補滿月序列。範圍＝該帳戶首筆交易月 →
-    max(當前月, 末筆交易月)，讓未來補登的交易不被默默丟掉；無交易帳戶回 months: []。
-    末月餘額 == Account.balance，balance-history 順帶當對帳。
+    Python 端 per-account 累加 running sum 並補滿月序列。範圍＝首筆交易月（純期初餘額
+    無交易者＝當前月）→ max(當前月, 末筆交易月)，讓未來補登的交易不被默默丟掉。
+
+    running 錨定到 Account.balance：從「未記成交易的期初餘額」（balance − 交易淨額）起算，
+    末月餘額因此恆等於 Account.balance——期初餘額不是交易，單純累加交易的 running sum
+    看不到它（就是「走勢末月 ≠ 儀表板真餘額」的根因）。無交易且無期初餘額者回 months: []。
+    （錨定＝以 balance 為準：此端點不再獨立對帳，要偵測 balance 漂移另設 reconcile。）
     """
     accounts = list(Account.objects.filter(user=user))
     monthly = (
@@ -206,12 +210,18 @@ def balance_history(user):
     result = []
     for acc in accounts:
         acc_changes = changes.get(acc.id, {})
-        if not acc_changes:
+        if not acc_changes and not acc.balance:
+            # 無交易且無期初餘額 → 沒有可畫的點
             result.append({'account_id': str(acc.id), 'account_name': acc.name, 'months': []})
             continue
-        running = Decimal('0.00')
+        # 錨定：running 從「未記成交易的期初餘額」（balance − 交易淨額）起，逐月加淨變化後
+        # 末月自然收斂回 acc.balance（與月份落點無關）。純期初餘額無交易者只有當前月一點。
+        net = sum(acc_changes.values(), Decimal('0.00'))
+        running = acc.balance - net
+        start = min(acc_changes) if acc_changes else current
+        end = max([*acc_changes, current])
         months = []
-        for y, m in _month_range(min(acc_changes), max(max(acc_changes), current)):
+        for y, m in _month_range(start, end):
             running += acc_changes.get((y, m), Decimal('0.00'))  # 缺月＝淨變化 0 → 沿用前值
             months.append({'month': f'{y:04d}-{m:02d}', 'balance': str(running)})
         result.append({'account_id': str(acc.id), 'account_name': acc.name, 'months': months})

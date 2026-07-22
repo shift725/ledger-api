@@ -1777,6 +1777,37 @@ class TestReportBalanceHistory:
         with django_assert_num_queries(2):  # 帳戶清單 + 每月淨變化聚合（與筆數／月份數無關）
             assert auth_client.get(self.URL).status_code == 200
 
+    def test_opening_balance_anchored(self, auth_client, user):
+        # 期初餘額（直接設 balance、未記成交易）＋交易：走勢須錨定到 Account.balance，
+        # 末月＝真餘額、歷史各月含期初那截（不是從 0 起累加、少掉期初）。
+        acc = Account.objects.create(
+            user=user, name='現金', type=Account.Type.CASH, balance=Decimal('1000.00')
+        )
+        self._post(auth_client, acc, '100.00', 'income', '2026-05-10T02:00:00Z')
+        self._post(auth_client, acc, '30.00', 'expense', '2026-07-15T05:00:00Z')
+        resp = auth_client.get(self.URL)
+        entry = next(e for e in resp.data if e['account_id'] == str(acc.id))
+        months = {mo['month']: mo['balance'] for mo in entry['months']}
+        assert months['2026-05'] == '1100.00'  # 期初 1000 + 100
+        assert months['2026-06'] == '1100.00'  # 缺月 forward-fill
+        assert months['2026-07'] == '1070.00'  # 1100 − 30
+        # 不變式：末月餘額 == Account.balance 現值（1000 + 100 − 30）
+        acc.refresh_from_db()
+        assert acc.balance == Decimal('1070.00')
+        assert Decimal(entry['months'][-1]['balance']) == acc.balance
+
+    def test_opening_balance_no_transactions(self, auth_client, user):
+        # 純期初餘額、零交易：仍須顯示當前月的真餘額，不是空清單（前端會 fallback 成 0.00）。
+        acc = Account.objects.create(
+            user=user, name='儲蓄', type=Account.Type.BANK, balance=Decimal('500.00')
+        )
+        resp = auth_client.get(self.URL)
+        entry = next(e for e in resp.data if e['account_id'] == str(acc.id))
+        now = timezone.localtime()
+        assert entry['months'] == [
+            {'month': f'{now.year:04d}-{now.month:02d}', 'balance': '500.00'}
+        ]
+
 
 # --- 報表：balance-history 快取（cache-aside + 交易寫入後 on_commit 失效）---
 
