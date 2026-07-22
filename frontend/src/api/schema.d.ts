@@ -827,6 +827,32 @@ export interface paths {
         patch: operations["ledger_transactions_partial_update"];
         trace?: never;
     };
+    "/api/ledger/transactions/transfer/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 帳戶間轉帳：一步建兩筆交易（轉出記支出、轉入記收入，皆排除收支統計）
+         * @description 業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+         *
+         *     - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+         *     - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+         *     - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+         *
+         *     五個資源共用這一份，資安邊界只有一處要審。
+         */
+        post: operations["ledger_transactions_transfer_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1083,6 +1109,7 @@ export interface components {
             description?: string;
             /** Format: date-time */
             occurred_at?: string;
+            readonly is_transfer?: boolean;
             tags?: string[];
             /** Format: uuid */
             readonly source_rule?: string | null;
@@ -1228,6 +1255,7 @@ export interface components {
             description?: string;
             /** Format: date-time */
             occurred_at?: string;
+            readonly is_transfer: boolean;
             tags?: string[];
             /** Format: uuid */
             readonly source_rule: string | null;
@@ -1241,6 +1269,31 @@ export interface components {
          * @enum {string}
          */
         TransactionTypeEnum: "income" | "expense";
+        /**
+         * @description 帳戶間轉帳的輸入：轉出／轉入帳戶＋出帳／入帳金額。
+         *
+         *     出帳（from_amount）＝離開轉出帳戶的錢、入帳（to_amount）＝到帳轉入帳戶的錢；差額＝手續費，
+         *     隱含吸收、不另記成交易（餘額因兩腿金額差自然淨減）。from_amount ≥ to_amount：同幣別到帳
+         *     不可能多於出帳。兩帳戶都收斂到本人（不信任 client）。純輸入序列化器，建立邏輯在 view。
+         */
+        Transfer: {
+            /** Format: uuid */
+            from_account: string;
+            /** Format: uuid */
+            to_account: string;
+            /** Format: decimal */
+            from_amount: string;
+            /** Format: decimal */
+            to_amount: string;
+            /** Format: date-time */
+            occurred_at?: string;
+            name?: string;
+            description?: string;
+        };
+        TransferResponse: {
+            from: components["schemas"]["Transaction"];
+            to: components["schemas"]["Transaction"];
+        };
         /** @description 使用者序列化器 */
         User: {
             /** Format: uuid */
@@ -2532,6 +2585,31 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Transaction"];
+                };
+            };
+        };
+    };
+    ledger_transactions_transfer_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Transfer"];
+                "application/x-www-form-urlencoded": components["schemas"]["Transfer"];
+                "multipart/form-data": components["schemas"]["Transfer"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransferResponse"];
                 };
             };
         };

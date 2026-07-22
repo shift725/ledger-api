@@ -2171,6 +2171,237 @@ def test_all_report_endpoints_require_authentication():
 
 
 @pytest.mark.django_db
+class TestTransferExcludedFromReports:
+    """轉帳（is_transfer）排除在收支統計外，但仍反映在逐月餘額走勢（帳戶間移動是真實金流）。"""
+
+    SUMMARY = '/api/ledger/reports/summary/'
+    BY_CATEGORY = '/api/ledger/reports/summary/by-category/'
+    BY_TAG = '/api/ledger/reports/summary/by-tag/'
+    SAVINGS = '/api/ledger/reports/savings-goal-status/'
+
+    @pytest.fixture
+    def july(self, user):
+        # 2026 七月（台北）：真實收支各一筆＋轉帳兩腿。轉帳刻意掛同分類（飲食）同標籤（旅遊），
+        # 證明排除是 is_transfer 旗標所為、非「剛好沒分類/標籤」。
+        acc = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+        food = Category.objects.create(user=user, name='飲食')
+        travel = Tag.objects.create(user=user, name='旅遊')
+        Transaction.objects.create(
+            user=user,
+            account=acc,
+            category=food,
+            amount=Decimal('5000.00'),
+            type=Transaction.Type.INCOME,
+            occurred_at=datetime(2026, 7, 10, 2, 0, tzinfo=UTC),
+        )
+        exp = Transaction.objects.create(
+            user=user,
+            account=acc,
+            category=food,
+            amount=Decimal('300.00'),
+            type=Transaction.Type.EXPENSE,
+            occurred_at=datetime(2026, 7, 15, 5, 0, tzinfo=UTC),
+        )
+        exp.tags.add(travel)
+        out = Transaction.objects.create(  # 轉帳出
+            user=user,
+            account=acc,
+            category=food,
+            amount=Decimal('2000.00'),
+            type=Transaction.Type.EXPENSE,
+            is_transfer=True,
+            occurred_at=datetime(2026, 7, 20, 5, 0, tzinfo=UTC),
+        )
+        out.tags.add(travel)
+        inc = Transaction.objects.create(  # 轉帳入
+            user=user,
+            account=acc,
+            category=food,
+            amount=Decimal('2000.00'),
+            type=Transaction.Type.INCOME,
+            is_transfer=True,
+            occurred_at=datetime(2026, 7, 20, 5, 0, tzinfo=UTC),
+        )
+        inc.tags.add(travel)
+
+    def test_month_summary_excludes_transfers(self, auth_client, july):
+        resp = auth_client.get(self.SUMMARY, {'year': 2026, 'month': 7})
+        assert resp.data['income'] == '5000.00'  # 不含轉帳入 2000
+        assert resp.data['expense'] == '300.00'  # 不含轉帳出 2000
+        assert resp.data['net'] == '4700.00'
+
+    def test_by_category_excludes_transfers(self, auth_client, july):
+        resp = auth_client.get(self.BY_CATEGORY, {'year': 2026, 'month': 7})
+        food = next(c for c in resp.data['categories'] if c['category_name'] == '飲食')
+        assert food['income'] == '5000.00'  # 不含轉帳入 2000
+        assert food['expense'] == '300.00'  # 不含轉帳出 2000
+
+    def test_by_tag_excludes_transfers(self, auth_client, july):
+        resp = auth_client.get(self.BY_TAG, {'year': 2026, 'month': 7})
+        travel = next(t for t in resp.data['tags'] if t['tag_name'] == '旅遊')
+        assert travel['expense'] == '300.00'  # 只有真實支出那筆掛旅遊；轉帳出 2000 排除
+        assert travel['income'] == '0.00'  # 轉帳入 2000 排除
+
+    def test_savings_goal_status_excludes_transfers(self, auth_client, user):
+        now = timezone.localtime()
+        acc = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+        SavingsGoal.objects.create(
+            user=user,
+            period_type=SavingsGoal.PeriodType.MONTHLY,
+            year=now.year,
+            month=now.month,
+            amount=Decimal('1000.00'),
+        )
+        Transaction.objects.create(
+            user=user, account=acc, amount=Decimal('3000.00'), type=Transaction.Type.INCOME
+        )
+        Transaction.objects.create(  # 轉帳入不該灌水 actual_net
+            user=user,
+            account=acc,
+            amount=Decimal('5000.00'),
+            type=Transaction.Type.INCOME,
+            is_transfer=True,
+        )
+        resp = auth_client.get(self.SAVINGS, {'year': now.year, 'month': now.month})
+        assert resp.data['actual_net'] == '3000.00'  # 不含轉帳 5000
+
+    def test_balance_history_includes_transfers(self, user):
+        # 轉帳是真實金流 → 仍計入逐月餘額走勢。五月轉出 100、七月真實收入 200。
+        acc = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+        Transaction.objects.create(
+            user=user,
+            account=acc,
+            amount=Decimal('100.00'),
+            type=Transaction.Type.EXPENSE,
+            is_transfer=True,
+            occurred_at=datetime(2026, 5, 10, 2, 0, tzinfo=UTC),
+        )
+        services.apply_to_balance(acc.id, Transaction.Type.EXPENSE, Decimal('100.00'))
+        Transaction.objects.create(
+            user=user,
+            account=acc,
+            amount=Decimal('200.00'),
+            type=Transaction.Type.INCOME,
+            occurred_at=datetime(2026, 7, 10, 2, 0, tzinfo=UTC),
+        )
+        services.apply_to_balance(acc.id, Transaction.Type.INCOME, Decimal('200.00'))
+        acc_row = next(r for r in reports.balance_history(user) if r['account_id'] == str(acc.id))
+        months = {m['month']: m['balance'] for m in acc_row['months']}
+        # 若轉帳被誤排除，五月那筆消失、序列從七月起：此斷言會紅
+        assert months['2026-05'] == '-100.00'  # 轉帳出反映在走勢
+        assert months['2026-07'] == '100.00'  # -100 + 200
+
+
+@pytest.mark.django_db
+class TestTransferEndpoint:
+    """POST /transactions/transfer/：一步原子建兩腿（from=expense、to=income、皆 is_transfer）。"""
+
+    URL = '/api/ledger/transactions/transfer/'
+    TXN = '/api/ledger/transactions/'
+
+    def _accounts(self, owner):
+        a = Account.objects.create(user=owner, name='現金', type=Account.Type.CASH)
+        b = Account.objects.create(user=owner, name='銀行', type=Account.Type.BANK)
+        return a, b
+
+    def _body(self, a, b, from_amount='1000.00', to_amount='1000.00'):
+        return {
+            'from_account': str(a.id),
+            'to_account': str(b.id),
+            'from_amount': from_amount,
+            'to_amount': to_amount,
+        }
+
+    def test_requires_authentication(self):
+        assert APIClient().post(self.URL, {}, format='json').status_code == 401
+
+    def test_no_fee_creates_two_legs_and_moves_balance(self, auth_client, user):
+        a, b = self._accounts(user)
+        resp = auth_client.post(self.URL, self._body(a, b), format='json')
+        assert resp.status_code == 201
+        out = Transaction.objects.get(account=a)
+        inc = Transaction.objects.get(account=b)
+        assert out.type == Transaction.Type.EXPENSE
+        assert out.amount == Decimal('1000.00')
+        assert out.is_transfer is True
+        assert inc.type == Transaction.Type.INCOME
+        assert inc.amount == Decimal('1000.00')
+        assert inc.is_transfer is True
+        assert out.occurred_at == inc.occurred_at  # 一次移動＝一個時點（伺服器算一次餵兩腿）
+        a.refresh_from_db()
+        b.refresh_from_db()
+        assert a.balance == Decimal('-1000.00')
+        assert b.balance == Decimal('1000.00')
+
+    def test_with_fee_absorbs_difference(self, auth_client, user):
+        a, b = self._accounts(user)
+        resp = auth_client.post(
+            self.URL, self._body(a, b, from_amount='1000.00', to_amount='970.00'), format='json'
+        )
+        assert resp.status_code == 201
+        a.refresh_from_db()
+        b.refresh_from_db()
+        assert a.balance == Decimal('-1000.00')  # 出帳全額
+        assert b.balance == Decimal('970.00')  # 到帳
+        assert a.balance + b.balance == Decimal('-30.00')  # 總資產淨減手續費 30，不另記
+
+    def test_response_returns_both_legs(self, auth_client, user):
+        a, b = self._accounts(user)
+        resp = auth_client.post(self.URL, self._body(a, b), format='json')
+        assert set(resp.data) >= {'from', 'to'}
+        assert resp.data['from']['account'] == a.id  # resp.data 未經 JSON 渲染 → PK 仍是 UUID 物件
+        assert resp.data['to']['account'] == b.id
+        assert resp.data['from']['is_transfer'] is True
+        assert resp.data['to']['is_transfer'] is True
+
+    def test_same_account_rejected(self, auth_client, user):
+        a, _ = self._accounts(user)
+        resp = auth_client.post(self.URL, self._body(a, a), format='json')
+        assert resp.status_code == 400
+        assert Transaction.objects.count() == 0
+
+    def test_from_amount_less_than_to_amount_rejected(self, auth_client, user):
+        a, b = self._accounts(user)
+        resp = auth_client.post(
+            self.URL, self._body(a, b, from_amount='100.00', to_amount='150.00'), format='json'
+        )
+        assert resp.status_code == 400  # 到帳不可多於出帳（手續費 = from − to ≥ 0）
+        assert Transaction.objects.count() == 0
+
+    def test_zero_amount_rejected(self, auth_client, user):
+        a, b = self._accounts(user)
+        resp = auth_client.post(
+            self.URL, self._body(a, b, from_amount='0.00', to_amount='0.00'), format='json'
+        )
+        assert resp.status_code == 400
+
+    def test_other_users_account_rejected(self, auth_client, user, other_user):
+        mine = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+        theirs = Account.objects.create(user=other_user, name='別人的', type=Account.Type.BANK)
+        resp = auth_client.post(self.URL, self._body(theirs, mine), format='json')
+        assert resp.status_code == 400  # 別人的帳戶不在收斂後的 queryset → 400、藏存在性
+        assert Transaction.objects.count() == 0  # 原子：驗證失敗不建任何腿
+
+    def test_is_transfer_read_only_on_normal_create(self, auth_client, user):
+        acc = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+        resp = auth_client.post(
+            self.TXN,
+            {'account': str(acc.id), 'amount': '100.00', 'type': 'expense', 'is_transfer': True},
+            format='json',
+        )
+        assert resp.status_code == 201
+        # 一般記一筆不得把交易標成轉帳（唯讀，client 夾帶被忽略）
+        assert Transaction.objects.get(id=resp.data['id']).is_transfer is False
+
+    def test_is_transfer_visible_in_response(self, auth_client, user):
+        acc = Account.objects.create(user=user, name='現金', type=Account.Type.CASH)
+        resp = auth_client.post(
+            self.TXN, {'account': str(acc.id), 'amount': '100.00', 'type': 'expense'}, format='json'
+        )
+        assert resp.data['is_transfer'] is False  # 在回應 fields 內（可讀）
+
+
+@pytest.mark.django_db
 class TestOpenAPISchema:
     """schema／docs 端點與 schema 品質看守。
 

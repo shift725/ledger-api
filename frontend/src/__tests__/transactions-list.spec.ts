@@ -181,6 +181,38 @@ describe('TransactionsView — 列項顯示', () => {
     expect(counter.n).toBe(1) // 進頁恰一發
   })
 
+  it('is_transfer 交易顯示「轉帳」徽章', async () => {
+    server.use(
+      http.get('*/api/ledger/transactions/', () =>
+        HttpResponse.json({
+          count: 1,
+          next: null,
+          previous: null,
+          results: [
+            {
+              id: 'tx',
+              account: 'acc-1',
+              account_name: '現金',
+              category: null,
+              category_name: null,
+              amount: '1000.00',
+              type: 'expense',
+              name: '轉去銀行',
+              description: '',
+              occurred_at: '2026-07-20T10:00:00+08:00',
+              tags: [],
+              tag_names: [],
+              source_rule: null,
+              is_transfer: true,
+            },
+          ],
+        }),
+      ),
+    )
+    const { wrapper } = await mountList(true)
+    expect(wrapper.text()).toContain('轉帳')
+  })
+
   it('查無資料 → 空態文案', async () => {
     server.use(
       http.get('*/api/ledger/transactions/', () =>

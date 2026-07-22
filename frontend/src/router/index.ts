@@ -23,6 +23,13 @@ export const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true },
   },
   {
+    // 必須排在 /transactions/:id 之前，否則 'transfer' 會被動態段當成 id 吃掉。
+    path: '/transactions/transfer',
+    name: 'transaction-transfer',
+    component: () => import('@/views/TransferFormView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/transactions/:id',
     name: 'transaction-detail',
     component: () => import('@/views/TransactionFormView.vue'),

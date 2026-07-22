@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -65,14 +67,16 @@ class TransactionSerializer(serializers.ModelSerializer):
             'name',
             'description',
             'occurred_at',
+            'is_transfer',
             'tags',
             'source_rule',
             'account_name',
             'category_name',
             'tag_names',
         ]
-        # source_rule 唯讀：由自動記帳流程回填，client 不得宣稱某筆交易來自某規則。
-        read_only_fields = ['id', 'source_rule']
+        # source_rule／is_transfer 唯讀：前者由自動記帳流程回填、後者只由轉帳端點設定；
+        # client 皆不得竄改（一般記一筆 is_transfer 恆 False，轉帳走 /transactions/transfer/）。
+        read_only_fields = ['id', 'source_rule', 'is_transfer']
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -88,6 +92,44 @@ class TransactionSerializer(serializers.ModelSerializer):
             self.fields['account'].queryset = Account.objects.filter(user=user)
             self.fields['category'].queryset = Category.objects.filter(user=user)
             self.fields['tags'].child_relation.queryset = Tag.objects.filter(user=user)
+
+
+class TransferSerializer(serializers.Serializer):
+    """帳戶間轉帳的輸入：轉出／轉入帳戶＋出帳／入帳金額。
+
+    出帳（from_amount）＝離開轉出帳戶的錢、入帳（to_amount）＝到帳轉入帳戶的錢；差額＝手續費，
+    隱含吸收、不另記成交易（餘額因兩腿金額差自然淨減）。from_amount ≥ to_amount：同幣別到帳
+    不可能多於出帳。兩帳戶都收斂到本人（不信任 client）。純輸入序列化器，建立邏輯在 view。
+    """
+
+    from_account = serializers.PrimaryKeyRelatedField(queryset=Account.objects.none())
+    to_account = serializers.PrimaryKeyRelatedField(queryset=Account.objects.none())
+    from_amount = serializers.DecimalField(
+        max_digits=12, decimal_places=2, min_value=Decimal('0.01')
+    )
+    to_amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal('0.01'))
+    occurred_at = serializers.DateTimeField(required=False)
+    name = serializers.CharField(max_length=200, required=False, allow_blank=True)
+    description = serializers.CharField(required=False, allow_blank=True)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # 第二層隔離：帳戶選項收斂到本人（同 TransactionSerializer.__init__）。條件用
+        # is_authenticated 而非 is not None——OpenAPI 產生器的假 request 帶 AnonymousUser。
+        request = self.context.get('request')
+        if request is not None and request.user.is_authenticated:
+            qs = Account.objects.filter(user=request.user)
+            self.fields['from_account'].queryset = qs
+            self.fields['to_account'].queryset = qs
+
+    def validate(self, attrs):
+        if attrs['from_account'] == attrs['to_account']:
+            raise serializers.ValidationError('轉出與轉入不可為同一帳戶')
+        if attrs['from_amount'] < attrs['to_amount']:
+            raise serializers.ValidationError(
+                {'to_amount': '入帳金額不可大於出帳金額（差額為手續費）'}
+            )
+        return attrs
 
 
 class RecurringRuleSerializer(serializers.ModelSerializer):

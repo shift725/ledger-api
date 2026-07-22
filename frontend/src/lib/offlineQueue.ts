@@ -12,10 +12,11 @@ import type { components } from '@/api/schema'
 // 的極端窗口會留下重複一筆（手動交易無冪等鍵，正解是契約加冪等鍵——backlog）。
 type Transaction = components['schemas']['Transaction']
 
-// 契約無獨立寫入 schema：剝掉唯讀衍生欄的寫入形狀（表單與佇列共用這份定義）。
+// 契約無獨立寫入 schema：剝掉唯讀／伺服器設定欄的寫入形狀（表單與佇列共用這份定義）。
+// is_transfer 唯讀（只由轉帳端點設定，一般記一筆恆 False），故與 source_rule 一併剝除。
 export type TxnWrite = Omit<
   Transaction,
-  'id' | 'source_rule' | 'account_name' | 'category_name' | 'tag_names'
+  'id' | 'source_rule' | 'is_transfer' | 'account_name' | 'category_name' | 'tag_names'
 >
 
 interface QueuedItem {

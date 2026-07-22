@@ -118,6 +118,9 @@ class Transaction(TimeStampedModel):
     name = models.CharField(max_length=200, blank=True)
     description = models.TextField(blank=True)
     occurred_at = models.DateTimeField(default=timezone.now)
+    # 跨帳戶轉帳（轉帳、領現金）的兩腿標記：排除在收支統計外（非真實收支），
+    # 但仍影響帳戶餘額與餘額走勢（錢確實在帳戶間移動）。
+    is_transfer = models.BooleanField(default=False)
     tags = models.ManyToManyField(Tag, blank=True, related_name='transactions')
     # 由定期定額規則自動產生時回填；規則刪除後交易保留（帳務事實不因規則消失而改變）。
     source_rule = models.ForeignKey(

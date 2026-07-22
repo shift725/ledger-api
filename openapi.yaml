@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Ledger API
-  version: 1.0.1
+  version: 1.1.0
   description: 記帳 REST API：JWT 認證、帳戶／分類／標籤／交易／儲蓄目標 CRUD 與報表聚合。
 paths:
   /api/auth/login/:
@@ -1686,6 +1686,41 @@ paths:
       responses:
         '204':
           description: No response body
+  /api/ledger/transactions/transfer/:
+    post:
+      operationId: ledger_transactions_transfer_create
+      description: |-
+        業務資源共用基底：強制登入 + 依 request.user 做資料隔離。
+
+        - get_queryset：把可見資料限縮到當前使用者（別人的物件不在集合內 → 讀/改/刪皆 404）。
+        - perform_create：寫入時把 user 設為當前使用者，無視 client 夾帶的 user。
+        - 分頁：list 一律回 count/next/previous/results 信封（LedgerPagination）。
+
+        五個資源共用這一份，資安邊界只有一處要審。
+      summary: 帳戶間轉帳：一步建兩筆交易（轉出記支出、轉入記收入，皆排除收支統計）
+      tags:
+      - ledger
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Transfer'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Transfer'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Transfer'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferResponse'
+          description: ''
 components:
   schemas:
     Account:
@@ -2200,6 +2235,9 @@ components:
         occurred_at:
           type: string
           format: date-time
+        is_transfer:
+          type: boolean
+          readOnly: true
         tags:
           type: array
           items:
@@ -2552,6 +2590,9 @@ components:
         occurred_at:
           type: string
           format: date-time
+        is_transfer:
+          type: boolean
+          readOnly: true
         tags:
           type: array
           items:
@@ -2580,6 +2621,7 @@ components:
       - amount
       - category_name
       - id
+      - is_transfer
       - source_rule
       - tag_names
       - type
@@ -2591,6 +2633,52 @@ components:
       description: |-
         * `income` - 收入
         * `expense` - 支出
+    Transfer:
+      type: object
+      description: |-
+        帳戶間轉帳的輸入：轉出／轉入帳戶＋出帳／入帳金額。
+
+        出帳（from_amount）＝離開轉出帳戶的錢、入帳（to_amount）＝到帳轉入帳戶的錢；差額＝手續費，
+        隱含吸收、不另記成交易（餘額因兩腿金額差自然淨減）。from_amount ≥ to_amount：同幣別到帳
+        不可能多於出帳。兩帳戶都收斂到本人（不信任 client）。純輸入序列化器，建立邏輯在 view。
+      properties:
+        from_account:
+          type: string
+          format: uuid
+        to_account:
+          type: string
+          format: uuid
+        from_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        to_amount:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        occurred_at:
+          type: string
+          format: date-time
+        name:
+          type: string
+          maxLength: 200
+        description:
+          type: string
+      required:
+      - from_account
+      - from_amount
+      - to_account
+      - to_amount
+    TransferResponse:
+      type: object
+      properties:
+        from:
+          $ref: '#/components/schemas/Transaction'
+        to:
+          $ref: '#/components/schemas/Transaction'
+      required:
+      - from
+      - to
     User:
       type: object
       description: 使用者序列化器
