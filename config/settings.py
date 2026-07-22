@@ -138,7 +138,7 @@ REST_FRAMEWORK = {
 SPECTACULAR_SETTINGS = {
     'TITLE': 'Ledger API',
     'DESCRIPTION': '記帳 REST API：JWT 認證、帳戶／分類／標籤／交易／儲蓄目標 CRUD 與報表聚合。',
-    'VERSION': '1.0.1',  # 對前端凍結的契約版：openapi.yaml 落檔＋測試看守；改形狀依 SemVer 升版
+    'VERSION': '1.1.0',  # 對前端凍結的契約版：openapi.yaml 落檔＋測試看守；改形狀依 SemVer 升版
     'SERVE_INCLUDE_SCHEMA': False,  # /api/schema/ 自身不列為 API 操作
     'SCHEMA_PATH_PREFIX': '/api/',  # tag 分組剝掉共同前綴 → 依 auth／ledger 分組
     'ENUM_NAME_OVERRIDES': {

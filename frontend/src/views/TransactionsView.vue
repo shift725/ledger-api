@@ -374,6 +374,7 @@ onBeforeUnmount(() => {
             <Dot v-if="txn.category" :color="categoryDots.get(txn.category)!" />
             <span class="truncate">{{ displayName(txn) }}</span>
             <Badge v-if="txn.source_rule">自動</Badge>
+            <Badge v-if="txn.is_transfer">轉帳</Badge>
           </span>
           <Amount :value="txn.amount" :type="txn.type" signed />
         </Row>

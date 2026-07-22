@@ -22,6 +22,7 @@ from .serializers import (
     SavingsGoalSerializer,
     TagSerializer,
     TransactionSerializer,
+    TransferSerializer,
 )
 
 
@@ -145,6 +146,48 @@ class TransactionViewSet(OwnedModelViewSet):
         # atomic 真正 commit 後才清，rollback 時不誤清；user pk 綁進閉包，不留 self 參照。
         user_id = self.request.user.id
         transaction.on_commit(lambda: reports.invalidate_balance_history(user_id))
+
+    @schema.transfer
+    @action(detail=False, methods=['post'])
+    def transfer(self, request):
+        # 帳戶間轉帳：一步原子建兩腿——轉出記支出、轉入記收入，皆標記 is_transfer 排除收支統計。
+        # 手續費＝出帳−入帳差額，隱含吸收（不另記交易）；兩腿打不同帳戶列、apply_to_balance 走
+        # F()，先天無 lost update，無需 select_for_update。carry-forward 不觸發（轉帳非預算事件）。
+        serializer = TransferSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        occurred_at = data.get('occurred_at') or timezone.now()  # 一次移動＝一個時點，兩腿共用
+        common = {
+            'user': request.user,
+            'occurred_at': occurred_at,
+            'is_transfer': True,
+            'name': data.get('name', ''),
+            'description': data.get('description', ''),
+        }
+        with transaction.atomic():
+            out = Transaction.objects.create(
+                account=data['from_account'],
+                amount=data['from_amount'],
+                type=Transaction.Type.EXPENSE,
+                **common,
+            )
+            inc = Transaction.objects.create(
+                account=data['to_account'],
+                amount=data['to_amount'],
+                type=Transaction.Type.INCOME,
+                **common,
+            )
+            services.apply_to_balance(out.account_id, out.type, out.amount)
+            services.apply_to_balance(inc.account_id, inc.type, inc.amount)
+            self._invalidate_balance_history_on_commit()
+        ctx = {'request': request}
+        return Response(
+            {
+                'from': TransactionSerializer(out, context=ctx).data,
+                'to': TransactionSerializer(inc, context=ctx).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class SavingsGoalViewSet(OwnedModelViewSet):

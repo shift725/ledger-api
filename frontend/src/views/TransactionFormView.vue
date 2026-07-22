@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { api } from '@/api/client'
 import type { components } from '@/api/schema'
 import { useReferenceStore } from '@/stores/reference'
@@ -164,8 +164,11 @@ onMounted(async () => {
 </script>
 
 <template>
-  <header class="mb-3.5">
+  <header class="mb-3.5 flex items-baseline justify-between">
     <h1 class="text-xl font-medium">{{ isEdit ? '編輯交易' : '記一筆' }}</h1>
+    <RouterLink v-if="!isEdit" to="/transactions/transfer" class="text-brand-text text-sm">
+      轉帳
+    </RouterLink>
   </header>
 
   <p v-if="notFound" class="text-ink-2 py-10 text-center">找不到這筆交易</p>

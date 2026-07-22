@@ -26,11 +26,16 @@ def _sum_amount(txn_type):
 
 
 def _txns_in_range(user, start, end):
-    """[start, end) 半開區間的使用者交易 queryset；lazy——外層續接 GROUP BY 或聚合都仍是 1 查詢。
+    """[start, end) 半開區間的使用者「收支」交易 queryset；排除轉帳（is_transfer）。
 
-    end 為排除界、呼叫端傳次一時刻表達含當日；命中 idx_txn_user_occurred。
+    轉帳是帳戶間移動、非真實收支 → 所有收支統計（今日／月／區間／分類／標籤／儲蓄目標）都經
+    此 helper 一併排除。餘額走勢（balance_history）與帳戶餘額（balance_overview）不經此 helper，
+    故仍反映轉帳造成的餘額變動。end 為排除界、呼叫端傳次一時刻表達含當日；命中
+    idx_txn_user_occurred。lazy——外層續接 GROUP BY 或聚合都仍是 1 查詢。
     """
-    return Transaction.objects.filter(user=user, occurred_at__gte=start, occurred_at__lt=end)
+    return Transaction.objects.filter(
+        user=user, occurred_at__gte=start, occurred_at__lt=end
+    ).exclude(is_transfer=True)
 
 
 def _range_net(user, start, end):

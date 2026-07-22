@@ -24,8 +24,8 @@ class TagAdmin(admin.ModelAdmin):
 
 @admin.register(Transaction)
 class TransactionAdmin(admin.ModelAdmin):
-    list_display = ('name', 'type', 'amount', 'account', 'category', 'occurred_at')
-    list_filter = ('type', 'account')
+    list_display = ('name', 'type', 'amount', 'account', 'category', 'is_transfer', 'occurred_at')
+    list_filter = ('type', 'account', 'is_transfer')
     search_fields = ('name', 'description')
     date_hierarchy = 'occurred_at'
     filter_horizontal = ('tags',)

@@ -20,6 +20,7 @@ from rest_framework import serializers
 from accounts.serializers import UserSerializer
 
 from .models import Account, SavingsGoal, Transaction
+from .serializers import TransactionSerializer, TransferSerializer
 
 # Account.Type 的 choices 出現在帳戶 CRUD 與報表信封兩個 component，enum 自動命名
 # 會撞名並退化成雜湊尾名；settings 的 ENUM_NAME_OVERRIDES 釘名時需要一個
@@ -197,6 +198,17 @@ savings_goal_status = extend_schema(
             'achieved': serializers.BooleanField(allow_null=True),
         },
     ),
+)
+
+transfer = extend_schema(
+    summary='帳戶間轉帳：一步建兩筆交易（轉出記支出、轉入記收入，皆排除收支統計）',
+    request=TransferSerializer,
+    responses={
+        201: inline_serializer(
+            name='TransferResponse',
+            fields={'from': TransactionSerializer(), 'to': TransactionSerializer()},
+        )
+    },
 )
 
 
