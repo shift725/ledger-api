@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { http, HttpResponse } from 'msw'
 import { server } from '@/mocks/node'
@@ -78,8 +78,8 @@ describe('reference store — ensure()（SWR）', () => {
     await store.ensure() // 暖啟：不 await 背景刷新，但立即 resolve
     expect(hits).toBe(0) // 立即回、未阻塞在網路上
 
-    await store.refresh() // 等背景刷新落地
-    expect(hits).toBe(3) // 三份各重抓一發
+    // 等背景那輪自己落地。不能拿 refresh() 當同步器——它一律另起一輪，會變成 6 發。
+    await vi.waitFor(() => expect(hits).toBe(3)) // 三份各重抓一發
   })
 
   it('single-flight：並發 ensure 只發一輪請求', async () => {
@@ -185,5 +185,65 @@ describe('reference store — localStorage 持久化與多用戶隔離', () => {
     await store.ensure() // 背景刷新會失敗，但 ensure 本身不得拋
     expect(store.loaded).toBe(true)
     expect(store.accounts.map((a) => a.id)).toEqual(['acc-c'])
+  })
+})
+
+describe('reference store — refresh() 的新鮮度', () => {
+  it('寫入後的 refresh 抓得到新資料，且進頁那輪晚回也蓋不掉它', async () => {
+    // 先讓前面測試沒 await 完的背景刷新落地，再裝自己的 handler——否則下面「進頁那發
+    // 已進 handler」的訊號可能是別人的請求觸發的，情境就沒建立起來（實測過，會假綠）。
+    await new Promise((resolve) => setTimeout(resolve, 100))
+
+    let release!: () => void
+    let firstEntered!: () => void
+    const held = new Promise<void>((resolve) => (release = resolve))
+    const entered = new Promise<void>((resolve) => (firstEntered = resolve))
+    let written = false
+    server.use(
+      // 「寫入」之前發出的抓取一律押住且內容停在寫入前，之後發出的才看得到新帳戶——
+      // 兩份內容必須不同，否則有沒有共用在途請求都長一樣，這個 bug 在測試裡不可見。
+      // 判斷依據刻意用寫入與否而非「第幾發」：其他測試沒 await 完的背景刷新也會打到
+      // 這個端點，數次數會被它們汙染（實測過，會假綠）。
+      http.get('*/api/ledger/accounts/', async () => {
+        if (!written) {
+          firstEntered()
+          await held
+          return HttpResponse.json({ count: 0, next: null, previous: null, results: [] })
+        }
+        return HttpResponse.json({
+          count: 1,
+          next: null,
+          previous: null,
+          results: [
+            {
+              id: 'acc-new',
+              name: '剛建立的帳戶',
+              type: 'cash',
+              balance: '0.00',
+              is_default: false,
+            },
+          ],
+        })
+      }),
+    )
+
+    const store = useReferenceStore()
+    const mounting = store.ensure() // 進頁抓取
+    await entered // 它真的進了 handler、卡在慢網路上，情境才算成立
+    written = true // 使用者建立帳戶，後端已寫入
+    const afterWrite = store.refresh() // 寫入成功後重抓
+
+    try {
+      // 共用在途抓取的話，這裡永遠等不到新帳戶——就是使用者看到的「存好了卻不在清單裡」。
+      await vi.waitFor(() => expect(store.accounts.map((a) => a.id)).toEqual(['acc-new']))
+      await afterWrite
+
+      release() // 進頁那輪（內容已過期）現在才回來
+      await mounting
+      expect(store.accounts.map((a) => a.id)).toEqual(['acc-new']) // 舊結果不得覆蓋新的
+    } finally {
+      release()
+      await Promise.allSettled([mounting, afterWrite]) // 別把在途請求留給下一支測試
+    }
   })
 })
