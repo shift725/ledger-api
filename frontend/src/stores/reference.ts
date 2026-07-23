@@ -46,6 +46,8 @@ export const useReferenceStore = defineStore('reference', () => {
   // 記憶體資料屬於哪個 user——換帳號時據此重置，前帳號資料不殘留給下一位。
   let ownerId: string | null = null
   let inFlight: Promise<void> | null = null
+  // 抓取的世代序號：判斷回來的這批還是不是最新的一輪（與 ownerId 同性質，一個判歸屬、一個判新舊）。
+  let generation = 0
 
   function cacheKey(): string | null {
     const user = useAuthStore().user
@@ -86,10 +88,13 @@ export const useReferenceStore = defineStore('reference', () => {
     }
   }
 
+  // 一律抓新的，不共用在途請求：refresh() 的呼叫者全是「剛寫完資料」，共用到的那發
+  // 是寫入前發出的，回來的清單看不到新資源，畫面就停在舊狀態。掛載尖峰的去重責任在
+  // ensure()——它才是同時被多個元件呼叫的那個。
   function refresh(): Promise<void> {
-    if (inFlight) return inFlight
     const forOwner = ownerId
-    inFlight = Promise.all([
+    const mine = ++generation
+    const run = Promise.all([
       fetchAll<Account>((page) =>
         api.GET('/api/ledger/accounts/', { params: { query: { page } } }),
       ),
@@ -101,6 +106,10 @@ export const useReferenceStore = defineStore('reference', () => {
       .then(([a, c, t]) => {
         // 抓取途中換了帳號：這批結果屬於前一位，丟棄（別把 A 的資料寫進 B 的畫面）。
         if (forOwner !== ownerId) return
+        // 已經有更新的抓取接手：這批是過期的，丟棄。少了這道看守，上面「一律抓新的」
+        // 等於白做——先發出的那輪若晚回（正是慢網路下會發生的事），它的舊清單會蓋掉
+        // 新抓回來的資料，寫入的資源一樣不會出現。
+        if (mine !== generation) return
         accounts.value = a
         categories.value = c
         tags.value = t
@@ -108,9 +117,10 @@ export const useReferenceStore = defineStore('reference', () => {
         persist()
       })
       .finally(() => {
-        inFlight = null
+        if (mine === generation) inFlight = null
       })
-    return inFlight
+    inFlight = run
+    return run
   }
 
   // 暖啟走 SWR：立即回快取、背景刷新（不 await、失敗靜默——離線時本來就會失敗）；
@@ -126,11 +136,13 @@ export const useReferenceStore = defineStore('reference', () => {
       inFlight = null // 前一位的在途請求作廢（結果會被上面的 owner 檢查丟棄）
       if (hydrate()) loaded.value = true
     }
+    // 去重住在這裡：同一頁多個元件掛載會各喊一次 ensure()，共用同一發即可，
+    // 它們要的只是「有資料可用」，不像寫入後的 refresh() 需要呼叫當下之後的資料。
     if (loaded.value) {
-      void refresh().catch(() => {})
+      void (inFlight ?? refresh()).catch(() => {})
       return Promise.resolve()
     }
-    return refresh()
+    return inFlight ?? refresh()
   }
 
   return { accounts, categories, tags, loaded, ensure, refresh }
