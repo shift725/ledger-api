@@ -36,6 +36,38 @@ describe('TransferFormView — 轉帳', () => {
     expect(from.value).not.toBe(to.value)
   })
 
+  it('連點送出只成立一次：請求飛行中送出鍵已鎖住（連點會生 4 筆交易）', async () => {
+    let posts = 0
+    let release!: () => void
+    const inFlight = new Promise<void>((resolve) => (release = resolve))
+    server.use(
+      http.post('*/api/ledger/transactions/transfer/', async () => {
+        posts += 1
+        await inFlight // 押住回應，模擬慢網路
+        return HttpResponse.json(
+          { from: { id: 'o1', is_transfer: true }, to: { id: 'i1', is_transfer: true } },
+          { status: 201 },
+        )
+      }),
+    )
+    const { wrapper, router } = await mountForm()
+    await wrapper.find('[data-test="amount"]').setValue('1000.00')
+
+    const form = wrapper.find('form')
+    try {
+      await form.trigger('submit')
+      await form.trigger('submit') // 連點
+      await form.trigger('submit')
+      expect(wrapper.find('[data-test="transfer-submit"]').attributes('disabled')).toBeDefined()
+    } finally {
+      release() // 斷言失敗也要放行，否則擱置的請求會汙染下一支測試
+      await flushPromises()
+    }
+    expect(posts).toBe(1)
+    // 等成功路徑（含 lazy route 導頁）跑完再結束，別把背景工作留給下一支測試
+    await vi.waitFor(() => expect(router.currentRoute.value.path).toBe('/transactions'))
+  })
+
   it('無手續費送出：出帳＝入帳＝金額、occurred_at 明送 ISO；成功→toast＋導回列表', async () => {
     let body: Record<string, unknown> | null = null
     server.use(

@@ -80,6 +80,36 @@ describe('RulesSection — 新增', () => {
     expect(toastMessage.value).toContain('已儲存')
   })
 
+  it('連點送出只成立一次：請求飛行中送出鍵已鎖住（連點會生兩條規則、此後每月雙倍記帳）', async () => {
+    let posts = 0
+    let release!: () => void
+    const inFlight = new Promise<void>((resolve) => (release = resolve))
+    server.use(
+      listOf([]),
+      http.post('*/api/ledger/recurring-rules/', async () => {
+        posts += 1
+        await inFlight // 押住回應，模擬慢網路
+        return HttpResponse.json({ ...baseRule, id: 'new-1' }, { status: 201 })
+      }),
+    )
+    const wrapper = await mountSection()
+    await wrapper.find('[data-test="rule-new"]').trigger('click')
+    await wrapper.find('[data-test="rule-amount"]').setValue('1500.00')
+    await wrapper.find('[data-test="rule-day"]').setValue(10)
+
+    const form = wrapper.find('form')
+    try {
+      await form.trigger('submit')
+      await form.trigger('submit') // 連點
+      await form.trigger('submit')
+      expect(wrapper.find('[data-test="rule-submit"]').attributes('disabled')).toBeDefined()
+    } finally {
+      release() // 斷言失敗也要放行，否則擱置的請求會汙染下一支測試
+      await flushPromises()
+    }
+    expect(posts).toBe(1)
+  })
+
   it('扣款日超出 1–31 前端擋住不送', async () => {
     let called = false
     server.use(

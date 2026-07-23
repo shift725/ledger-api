@@ -7,6 +7,7 @@ import { useReferenceStore } from '@/stores/reference'
 import { toDatetimeLocal } from '@/lib/format'
 import { toast } from '@/lib/toast'
 import { messagesFrom } from '@/lib/errors'
+import { useSubmitting } from '@/lib/useSubmitting'
 import Card from '@/components/ui/UiCard.vue'
 
 type Transfer = components['schemas']['Transfer']
@@ -77,7 +78,7 @@ function resolveAmounts(): { from: string; to: string } | null {
   return { from: form.fromAmount, to: form.toAmount }
 }
 
-async function submit() {
+async function doSubmit() {
   serverError.value = ''
   accountError.value = form.fromAccount === form.toAccount ? '轉出與轉入不可為同一帳戶' : ''
   const amounts = resolveAmounts()
@@ -108,8 +109,13 @@ async function submit() {
   }
   await reference.refresh() // 兩帳戶餘額已變 → 重抓參照資料
   toast('已轉帳')
-  router.push('/transactions')
+  // 必須 await：route 是 lazy import（() => import），不等它完成的話，送出鍵會在
+  // chunk 還在下載時就解鎖，而此刻表單仍掛著、欄位仍有值 → 慢網路下還能再轉一次。
+  await router.push('/transactions')
 }
+
+// 送出期間鎖住按鈕：連點一次轉帳會生出四筆交易（兩次轉帳各兩腿），本站損害最大。
+const { submitting, run: submit } = useSubmitting(doSubmit)
 </script>
 
 <template>
@@ -241,7 +247,8 @@ async function submit() {
     <button
       type="submit"
       data-test="transfer-submit"
-      class="bg-brand-fill rounded-lg py-2.5 font-medium text-white"
+      :disabled="submitting"
+      class="bg-brand-fill rounded-lg py-2.5 font-medium text-white disabled:opacity-60"
     >
       轉帳
     </button>

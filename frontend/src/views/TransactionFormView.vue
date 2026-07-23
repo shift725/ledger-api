@@ -9,6 +9,7 @@ import { toast } from '@/lib/toast'
 import { messagesFrom } from '@/lib/errors'
 import { enqueue, type TxnWrite } from '@/lib/offlineQueue'
 import { loadErrorText } from '@/lib/online'
+import { useSubmitting } from '@/lib/useSubmitting'
 import Card from '@/components/ui/UiCard.vue'
 
 type Transaction = components['schemas']['Transaction']
@@ -59,7 +60,7 @@ function toggleTag(id: string) {
   else form.tags.splice(i, 1)
 }
 
-async function submit() {
+async function doSubmit() {
   serverError.value = ''
   const amountOk = validateAmount()
   // 帳戶為空只可能是「使用者一個帳戶都還沒建」（有帳戶時預設會選好）→ 欄位下方引導去設定，
@@ -92,7 +93,7 @@ async function submit() {
     if (!isEdit.value) {
       enqueue(payload)
       toast('目前離線：已存入待送佇列，恢復連線後自動補送')
-      router.push('/transactions')
+      await router.push('/transactions') // await 的理由同下方成功路徑
     } else {
       serverError.value = '網路連線失敗，請稍後再試'
     }
@@ -106,8 +107,13 @@ async function submit() {
     return
   }
   toast('已儲存')
-  router.push('/transactions')
+  // 必須 await：route 是 lazy import（() => import），不等它完成的話，送出鍵會在
+  // chunk 還在下載時就解鎖，而此刻表單仍掛著、欄位仍有值 → 慢網路下還能再送出一次。
+  await router.push('/transactions')
 }
+
+// 送出期間鎖住按鈕，避免延遲時連點送出兩筆重複交易（機制與接法見 lib/useSubmitting.ts）。
+const { submitting, run: submit } = useSubmitting(doSubmit)
 
 async function confirmDelete() {
   deleteDialog.value?.close?.()
@@ -294,7 +300,8 @@ onMounted(async () => {
     <button
       type="submit"
       data-test="form-submit"
-      class="bg-brand-fill rounded-lg py-2.5 font-medium text-white"
+      :disabled="submitting"
+      class="bg-brand-fill rounded-lg py-2.5 font-medium text-white disabled:opacity-60"
     >
       儲存
     </button>
