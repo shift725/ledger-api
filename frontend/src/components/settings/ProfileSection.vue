@@ -5,6 +5,7 @@ import type { components } from '@/api/schema'
 import { useAuthStore } from '@/stores/auth'
 import { messagesFrom } from '@/lib/errors'
 import { toast } from '@/lib/toast'
+import { useSubmitting } from '@/lib/useSubmitting'
 
 type User = components['schemas']['User']
 
@@ -41,7 +42,7 @@ function fill(u: User) {
   display.createdAt = (u.created_at ?? '').slice(0, 10)
 }
 
-async function submit() {
+async function doSubmit() {
   formError.value = ''
   const id = auth.user?.id
   if (!id) return
@@ -58,6 +59,9 @@ async function submit() {
   auth.updateUser({ username: data.username, email: data.email })
   toast('已儲存')
 }
+
+// 送出期間鎖住按鈕：這支是冪等的 PATCH，鎖住為的是按壓回饋與全站行為一致。
+const { submitting, run: submit } = useSubmitting(doSubmit)
 </script>
 
 <template>
@@ -108,7 +112,8 @@ async function submit() {
     <button
       type="submit"
       data-test="profile-submit"
-      class="bg-brand-fill self-start rounded-lg px-4 py-2 text-sm text-white"
+      :disabled="submitting"
+      class="bg-brand-fill self-start rounded-lg px-4 py-2 text-sm text-white disabled:opacity-60"
     >
       儲存
     </button>

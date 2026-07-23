@@ -5,6 +5,7 @@ import type { components } from '@/api/schema'
 import { fetchAll, useReferenceStore } from '@/stores/reference'
 import { messagesFrom } from '@/lib/errors'
 import { toast } from '@/lib/toast'
+import { useSubmitting } from '@/lib/useSubmitting'
 import UiAmount from '@/components/ui/UiAmount.vue'
 import UiBadge from '@/components/ui/UiBadge.vue'
 
@@ -93,7 +94,7 @@ function validate(): boolean {
   return true
 }
 
-async function submit() {
+async function doSubmit() {
   formError.value = ''
   if (!validate()) return
   const body = { ...form, category: form.category || null } as unknown as RecurringRule
@@ -111,6 +112,9 @@ async function submit() {
   await load()
   toast('已儲存')
 }
+
+// 送出期間鎖住按鈕：連點會建出兩條相同規則，此後每月自動記帳都變雙倍。
+const { submitting, run: submit } = useSubmitting(doSubmit)
 
 async function toggleActive(rule: RecurringRule) {
   // 停用≠停機：暫停期間不補記，重新啟用時後端從今日重算 next_run_date。
@@ -291,7 +295,8 @@ async function confirmDelete() {
           <button
             type="submit"
             data-test="rule-submit"
-            class="bg-brand-fill rounded-lg px-3 py-1.5 text-sm text-white"
+            :disabled="submitting"
+            class="bg-brand-fill rounded-lg px-3 py-1.5 text-sm text-white disabled:opacity-60"
           >
             儲存
           </button>

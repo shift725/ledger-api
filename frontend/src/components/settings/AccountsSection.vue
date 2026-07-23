@@ -6,6 +6,7 @@ import { useReferenceStore } from '@/stores/reference'
 import { accountTypeLabel } from '@/lib/format'
 import { messagesFrom } from '@/lib/errors'
 import { toast } from '@/lib/toast'
+import { useSubmitting } from '@/lib/useSubmitting'
 import UiAmount from '@/components/ui/UiAmount.vue'
 import UiBadge from '@/components/ui/UiBadge.vue'
 
@@ -41,7 +42,7 @@ function openEdit(acc: Account) {
   dialog.value?.showModal()
 }
 
-async function submit() {
+async function doSubmit() {
   formError.value = ''
   const body = { ...form } as unknown as Account
   const { error } = editingId.value
@@ -58,6 +59,9 @@ async function submit() {
   await reference.refresh()
   toast('已儲存')
 }
+
+// 送出期間鎖住按鈕：連點的第二發會撞上後端重名約束，使用者只會看到一句莫名的 400。
+const { submitting, run: submit } = useSubmitting(doSubmit)
 
 async function setDefault(acc: Account) {
   if (acc.is_default) return
@@ -188,7 +192,8 @@ async function confirmDelete() {
           <button
             type="submit"
             data-test="account-submit"
-            class="bg-brand-fill rounded-lg px-3 py-1.5 text-sm text-white"
+            :disabled="submitting"
+            class="bg-brand-fill rounded-lg px-3 py-1.5 text-sm text-white disabled:opacity-60"
           >
             儲存
           </button>

@@ -5,6 +5,7 @@ import type { components } from '@/api/schema'
 import { useReferenceStore } from '@/stores/reference'
 import { messagesFrom } from '@/lib/errors'
 import { toast } from '@/lib/toast'
+import { useSubmitting } from '@/lib/useSubmitting'
 
 // 分類與標籤同形（{id, name, description}），只差端點路徑 → 一支泛用元件、resource 決定路徑。
 type Category = components['schemas']['Category']
@@ -62,7 +63,7 @@ function openEdit(item: SimpleItem) {
   dialog.value?.showModal()
 }
 
-async function submit() {
+async function doSubmit() {
   formError.value = ''
   const body = { ...form }
   const { error } = editingId.value ? await updateReq(editingId.value, body) : await createReq(body)
@@ -74,6 +75,9 @@ async function submit() {
   await reference.refresh()
   toast('已儲存')
 }
+
+// 送出期間鎖住按鈕：連點的第二發會撞上後端重名約束，使用者只會看到一句莫名的 400。
+const { submitting, run: submit } = useSubmitting(doSubmit)
 
 function askDelete(id: string) {
   pendingDeleteId.value = id
@@ -164,7 +168,8 @@ async function confirmDelete() {
           <button
             type="submit"
             data-test="res-submit"
-            class="bg-brand-fill rounded-lg px-3 py-1.5 text-sm text-white"
+            :disabled="submitting"
+            class="bg-brand-fill rounded-lg px-3 py-1.5 text-sm text-white disabled:opacity-60"
           >
             儲存
           </button>

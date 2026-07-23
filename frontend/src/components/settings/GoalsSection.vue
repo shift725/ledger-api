@@ -5,6 +5,7 @@ import type { components } from '@/api/schema'
 import { fetchAll } from '@/stores/reference'
 import { messagesFrom } from '@/lib/errors'
 import { toast } from '@/lib/toast'
+import { useSubmitting } from '@/lib/useSubmitting'
 import UiAmount from '@/components/ui/UiAmount.vue'
 
 type SavingsGoal = components['schemas']['SavingsGoal']
@@ -75,7 +76,7 @@ function validate(): boolean {
   return true
 }
 
-async function submit() {
+async function doSubmit() {
   formError.value = ''
   if (!validate()) return
   // 年度目標不帶 month（後端拒年度帶 month）；月度才送 month。
@@ -99,6 +100,9 @@ async function submit() {
   await load()
   toast('已儲存')
 }
+
+// 送出期間鎖住按鈕：連點的第二發會撞上同期間唯一性約束，使用者只會看到一句莫名的 400。
+const { submitting, run: submit } = useSubmitting(doSubmit)
 
 function askDelete(id: string) {
   pendingDeleteId.value = id
@@ -217,7 +221,8 @@ async function confirmDelete() {
           <button
             type="submit"
             data-test="goal-submit"
-            class="bg-brand-fill rounded-lg px-3 py-1.5 text-sm text-white"
+            :disabled="submitting"
+            class="bg-brand-fill rounded-lg px-3 py-1.5 text-sm text-white disabled:opacity-60"
           >
             儲存
           </button>

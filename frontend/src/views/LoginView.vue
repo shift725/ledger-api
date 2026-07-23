@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { ApiError } from '@/api/auth'
+import { useSubmitting } from '@/lib/useSubmitting'
 
 const route = useRoute()
 const router = useRouter()
@@ -11,21 +12,23 @@ const auth = useAuthStore()
 const email = ref('')
 const password = ref('')
 const error = ref('')
-const submitting = ref(false)
 
-async function onSubmit() {
+async function doSubmit() {
   error.value = ''
-  submitting.value = true
   try {
     await auth.login(email.value, password.value)
-    const redirect = route.query.redirect
-    router.push(typeof redirect === 'string' ? redirect : '/')
   } catch (e) {
     error.value = e instanceof ApiError ? '登入失敗，請檢查帳號與密碼' : '發生錯誤，請稍後再試'
-  } finally {
-    submitting.value = false
+    return
   }
+  const redirect = route.query.redirect
+  // 必須 await：route 是 lazy import（() => import），不等它完成的話，送出鍵會在
+  // chunk 還在下載時就解鎖，而此刻表單仍掛著、欄位仍有值 → 慢網路下還能再送出一次。
+  await router.push(typeof redirect === 'string' ? redirect : '/')
 }
+
+// 送出期間鎖住按鈕（機制與接法見 lib/useSubmitting.ts）。
+const { submitting, run: onSubmit } = useSubmitting(doSubmit)
 </script>
 
 <template>

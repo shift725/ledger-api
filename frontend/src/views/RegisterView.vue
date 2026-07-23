@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { ApiError } from '@/api/auth'
+import { useSubmitting } from '@/lib/useSubmitting'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -13,7 +14,6 @@ const password = ref('')
 const passwordConfirm = ref('')
 const phone = ref('')
 const error = ref('')
-const submitting = ref(false)
 
 // Surface the first backend message from a DRF 400 ({field: [msg]}) or the 409
 // ({error: msg}) so validation failures are actionable, not a generic blurb.
@@ -27,9 +27,8 @@ function firstError(body: unknown): string {
   return '註冊失敗，請檢查輸入'
 }
 
-async function onSubmit() {
+async function doSubmit() {
   error.value = ''
-  submitting.value = true
   try {
     await auth.register({
       username: username.value,
@@ -38,13 +37,17 @@ async function onSubmit() {
       password_confirm: passwordConfirm.value,
       phone: phone.value || undefined,
     })
-    router.push('/')
   } catch (e) {
     error.value = e instanceof ApiError ? firstError(e.body) : '發生錯誤，請稍後再試'
-  } finally {
-    submitting.value = false
+    return
   }
+  // 必須 await：route 是 lazy import（() => import），不等它完成的話，送出鍵會在
+  // chunk 還在下載時就解鎖，而此刻表單仍掛著、欄位仍有值 → 慢網路下還能再送出一次。
+  await router.push('/')
 }
+
+// 送出期間鎖住按鈕（機制與接法見 lib/useSubmitting.ts）。
+const { submitting, run: onSubmit } = useSubmitting(doSubmit)
 </script>
 
 <template>

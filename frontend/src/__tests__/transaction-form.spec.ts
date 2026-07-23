@@ -60,6 +60,35 @@ describe('TransactionFormView — 記一筆', () => {
     await vi.waitFor(() => expect(router.currentRoute.value.path).toBe('/transactions'))
   })
 
+  it('連點送出只成立一次：請求飛行中送出鍵已鎖住', async () => {
+    let posts = 0
+    let release!: () => void
+    const inFlight = new Promise<void>((resolve) => (release = resolve))
+    server.use(
+      http.post('*/api/ledger/transactions/', async () => {
+        posts += 1
+        await inFlight // 押住回應，模擬慢網路
+        return HttpResponse.json({ id: 'new-1' }, { status: 201 })
+      }),
+    )
+    const { wrapper, router } = await mountForm('/transactions/new')
+    await wrapper.find('input[data-test="form-amount"]').setValue('123.45')
+
+    const form = wrapper.find('form')
+    try {
+      await form.trigger('submit')
+      await form.trigger('submit') // 連點
+      await form.trigger('submit')
+      expect(wrapper.find('[data-test="form-submit"]').attributes('disabled')).toBeDefined()
+    } finally {
+      release() // 斷言失敗也要放行，否則擱置的請求會汙染下一支測試
+      await flushPromises()
+    }
+    expect(posts).toBe(1)
+    // 等成功路徑（含 lazy route 導頁）跑完再結束，別把背景工作留給下一支測試
+    await vi.waitFor(() => expect(router.currentRoute.value.path).toBe('/transactions'))
+  })
+
   it('編輯載入遇網路錯：顯示離線文案、不給空表單（防空值誤存）', async () => {
     server.use(http.get('*/api/ledger/transactions/txn-9/', () => HttpResponse.error()))
     window.dispatchEvent(new Event('offline'))
