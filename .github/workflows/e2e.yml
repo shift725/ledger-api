@@ -23,6 +23,12 @@ on:
 jobs:
   e2e:
     runs-on: ubuntu-latest
+    # 逾時寫在這裡而不是 deploy.yml 的 smoke-e2e：GHA 不支援在呼叫可重用 workflow
+    # （uses:）的 job 上設 timeout-minutes，那種 job 只吃 uses/with/secrets/needs/if/
+    # permissions/strategy/concurrency。所以逾時只能落在被呼叫者自己的 job 上——
+    # 這是限制不是偏好，別「順手收攏」搬回呼叫端（YAML 合法但 GHA 會拒收整個 workflow）。
+    # 取值原則同 deploy.yml：實測的 4–8 倍；本地棧模式含 --build 起全棧＋裝瀏覽器，故從寬。
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v5

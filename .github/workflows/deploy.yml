@@ -38,6 +38,10 @@ jobs:
   build-push:
     if: github.event_name != 'workflow_dispatch' || inputs.image_tag == ''
     runs-on: ubuntu-latest
+    # 逾時取實測值的 4–8 倍（全鏈 2.7–3.4 分鐘）：慢但健康的一次跑絕不誤觸，
+    # 掛死則以分鐘計而非小時計——GitHub 的預設上限是六小時，靠它兜底等於不兜。
+    # 這顆含兩顆 image 的 build，cache miss 時最久，故給得比 deploy 寬。
+    timeout-minutes: 30
 
     # GITHUB_TOKEN 收到本 job 的最小需求：讀 checkout、寫 packages。
     # 這是 workflow 執行期的短命 token（job 結束即失效）——不辦 PAT、無長期憑證。
@@ -100,6 +104,9 @@ jobs:
       && github.event_name != 'pull_request'
       && (needs.build-push.result == 'success' || needs.build-push.result == 'skipped') }}
     runs-on: ubuntu-latest
+    # 本體被 compose 的 --wait-timeout 300 綁住，加上 pull／scp／smoke 也遠低於此。
+    # 取值原則同 build-push。
+    timeout-minutes: 15
     permissions:
       contents: read
     # 部署序列化：兩支 PR 接連 merge 不會兩個部署互踩（cancel-in-progress: false＝進行中的不砍、
@@ -113,6 +120,11 @@ jobs:
 
       # 金鑰＋known_hosts 落檔；host/user 收進 ssh config，後續只用別名 deploy-target。
       # known_hosts 由 secret 帶入＝主機指紋釘死（絕不 StrictHostKeyChecking=no／MITM 門戶大開）。
+      # keepalive 是必要的，不是調校：起棧那步 --wait 等健康檢查時連線會安靜好幾分鐘，
+      # 中間的 NAT 一旦把狀態清掉，封包從此石沉大海而 ssh client 預設**永遠不會察覺**，
+      # 就這樣掛著（實際發生過：主機端早已跑完並斷線，runner 仍卡在同一個 ssh 上）。
+      # --wait-timeout 300 只管得住 compose 自己，管不到承載它的這條連線。
+      # 15s × 4 次無回應即判定對端已死、以非零收場；同時定期探測也讓 NAT 不會在安靜期清掉狀態。
       - name: 佈署連線設定
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -131,6 +143,8 @@ jobs:
             echo "  IdentityFile ~/.ssh/deploy_key"
             echo "  IdentitiesOnly yes"
             echo "  UserKnownHostsFile ~/.ssh/known_hosts"
+            echo "  ServerAliveInterval 15"
+            echo "  ServerAliveCountMax 4"
           } > ~/.ssh/config
 
       # 部署本體：Secrets→.env、備份主機舊 .env、傳 compose＋edge 模板＋.env、pull、起棧等健康。
@@ -142,7 +156,12 @@ jobs:
         run: |
           # .env：GitHub Secrets 為唯一正本 render 到主機；IMAGE_TAG 由本 run 追加為唯一來源
           # （不放進 secret，免 dotenv「後行覆蓋前行」的歧義）。
-          printf '%s\n' "$DEPLOY_ENV_FILE" > .env.deploy
+          # 追加前先濾掉 secret 裡可能殘留的 IMAGE_TAG：secret 是唯寫的，唯一讀得回來的
+          # 副本就是主機上「已被追加過」的 render 產物——拿它回填 secret 就會把追加行醃進去，
+          # 主機 .env 從此兩行並存、靠後行覆蓋僥倖正確——不會報錯，所以不會有人發現
+          # （實際發生過，是追查另一件事時才撞見的）。
+          # 濾掉之後，「恰好一行、且是本次 run 決定的」由結構保證，不靠人記得先清 secret。
+          printf '%s\n' "$DEPLOY_ENV_FILE" | grep -v '^IMAGE_TAG=' > .env.deploy
           echo "IMAGE_TAG=$IMAGE_TAG" >> .env.deploy
           # 主機現有 .env 先留一份 .bak（首次轉正若 secret 抄錯的救生索；正本仍是 Secrets）。
           ssh deploy-target 'cp /srv/ledger-api/.env /srv/ledger-api/.env.bak 2>/dev/null || true'
