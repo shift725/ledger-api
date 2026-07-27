@@ -1,8 +1,8 @@
 # 貢獻指南（Contributing to ledger-api）
 
-感謝你願意為 `ledger-api` 出一份力。本專案是一個以 **Django REST Framework + SimpleJWT** 打底的記帳 REST API；目前已完成帳號與認證核心，記帳（ledger）領域為進行中的下一階段。
+感謝你願意為 `ledger-api` 出一份力。本專案是一個以 **Django REST Framework + SimpleJWT** 打底的記帳服務，含 Vue 3 PWA 前端與自動部署管線；認證核心（`accounts/`）、記帳領域（`ledger/`）與前端（`frontend/`）皆已完成。
 
-這份文件說明：怎麼把開發環境跑起來、怎麼做出符合慣例的改動、以及一個 Pull Request 從開分支到 merge 的完整流程。動手前，建議先快速看過 [`README.md`](README.md)（怎麼把專案跑起來、API 端點、部署）。
+這份文件說明：怎麼把開發環境跑起來、怎麼做出符合慣例的改動、以及一個 Pull Request 從開分支到 merge 的完整流程。動手前建議先看過 [`README.md`](README.md)（怎麼把專案跑起來）與 [`ARCHITECTURE.md`](ARCHITECTURE.md)（系統形狀與各層職責）。
 
 ---
 
@@ -16,25 +16,32 @@
 
 ## 2. 開發環境建置
 
-兩條路徑，細節見 README，這裡只列骨架。
+三條路徑，細節見 README，這裡只列骨架。
 
-**Docker（主要路徑）** —— 見 [README · 快速開始](README.md#快速開始本機http)：
+**Docker（主要路徑）** —— 見 [README · 快速開始](README.md#快速開始)：
 
 ```bash
-cp .env.example .env          # 然後填好 SECRET_KEY、POSTGRES_PASSWORD（見 README）
+cp .env.example .env          # 範例值即可跑起來
 docker compose up -d --build
 docker compose logs -f web    # 看 entrypoint → migrate → collectstatic → gunicorn
 ```
 
-**本機 venv（不經 Docker）** —— 見 [README · 本機開發](README.md#本機開發不經-docker)：
+**後端本機 venv（不經 Docker）** —— 見 [README · 本機開發](README.md#本機開發)：
 
 ```bash
 python -m venv .venv
 .venv\Scripts\Activate.ps1            # Windows PowerShell；macOS/Linux：source .venv/bin/activate
-pip install -r requirements-dev.txt   # runtime + 開發工具（ruff、coverage）
+pip install -r requirements-dev.txt   # runtime + 開發工具（ruff、coverage、pytest）
 # 提供 DATABASE_URL 後：
 python manage.py migrate
 python manage.py runserver
+```
+
+**前端**（Vite dev server，`/api` 會代理到 `http://localhost:8000`，所以後端要起著）：
+
+```bash
+npm --prefix frontend ci
+npm --prefix frontend run dev
 ```
 
 > `ruff` 與 `coverage` 屬 `requirements-dev.txt`，**不在 runtime image 內**，請在本機 venv 執行。
@@ -56,30 +63,41 @@ fork → 從最新 main 開分支 → 改動 → 本機自檢（lint + format + 
 4. **本機自檢**（見 [§4](#4-提交前的本機自檢)）全綠再提交。
 5. **commit**：遵循 [§6 Conventional Commits](#6-commit-規範conventional-commits)。
 6. **push 並開 PR**，填好描述與 [§8 self-checklist](#8-pull-request-流程與檢查清單)。
-7. **通過 review** 後才能 merge（自動化 CI 為 roadmap 目標，落地前以人工 review 為準）。
+7. **CI 兩道檢查綠**（`test` 與 `frontend`）才能 merge；`main` 受保護，紅燈進不去。
 
 ---
 
 ## 4. 提交前的本機自檢
 
-提交前請在本機跑過以下三道（全綠再 commit）：
+**後端**——提交前請在本機跑過以下四道（全綠再 commit）：
 
 ```bash
 ruff check .                 # lint（規則集 E / F / I / UP）
 ruff format --check .        # 確認格式（單引號風格）；要實際套用改 ruff format .
 coverage run -m pytest       # 跑測試並蒐集覆蓋率（branch 模式，需 DATABASE_URL）
-coverage report              # 覆蓋率報表（accounts、config；低於 fail_under=75 即非零結束）
+coverage report              # 覆蓋率報表（accounts、config、ledger；低於 fail_under=75 即非零結束）
 ```
+
+**前端**——動到 `frontend/` 就跑這四道（與 CI 的 `frontend` job 同一組）：
+
+```bash
+npm --prefix frontend run lint
+npm --prefix frontend run format:check
+npm --prefix frontend run type-check
+npm --prefix frontend run test:unit
+```
+
+> 改到 API 形狀時，`openapi.yaml` 要重新匯出，並跑 `npm --prefix frontend run typegen` 重生前端型別——CI 會用 `git diff --exit-code` 檢查型別有沒有跟著更新，沒更新就紅。
 
 容器內若只想跑測試（runtime image 不含 pytest／覆蓋率工具，改用 Django 內建 runner）：
 
 ```bash
-docker compose exec web python manage.py test accounts
+docker compose exec web python manage.py test
 ```
 
 **pre-commit（自動化上面的 lint/format）**
 
-裝好後每次 `git commit` 會自動跑 ruff lint/format 與通用檢查（trailing-whitespace、EOF、check-yaml…），免去手動跑前兩道：
+裝好後每次 `git commit` 會自動跑 ruff lint/format、前端的 lint/格式檢查，以及通用檢查（trailing-whitespace、EOF、check-yaml…），免去手動跑格式那幾道：
 
 ```bash
 pip install -r requirements-dev.txt   # 已含 pre-commit
@@ -87,9 +105,9 @@ pre-commit install                    # 安裝 git hook（一次性）
 pre-commit run --all-files            # 首次、或想對全 repo 跑一次時
 ```
 
-hook 會自動修可修的（如移除未用 import、統一格式）；被修改的檔需重新 `git add` 再 commit。Ruff 規則沿用 `pyproject.toml`，不重複定義。
+hook 會自動修可修的（如移除未用 import、統一格式）；被修改的檔需重新 `git add` 再 commit。Ruff 規則沿用 `pyproject.toml`、前端 hook 直接呼叫 `frontend/` 的 npm script，兩邊都不重複定義設定。
 
-> **現況 vs 目標**：lint/format 的提交前自檢已由 **pre-commit 自動化**（上方）；**測試與覆蓋率**仍須手動跑（pre-commit 不掛測試，因需 Postgres）。在 PR 上自動跑 lint + test 的 **CI** 仍是 roadmap 目標、**尚未落地**，落地前以本機自檢與人工 review 為準。
+> **pre-commit 不掛測試**（測試需要 Postgres），所以測試與覆蓋率仍要自己跑。真正的守門在 PR 上：CI 的 `test` 與 `frontend` 兩道 required check 會把上面全部再跑一次。
 
 ---
 
@@ -168,13 +186,15 @@ chore/42-bump-ruff
 - [ ] 從最新 `main` 開的分支，分支名符合 [§5](#5-分支命名規則)。
 - [ ] `ruff check .` 與 `ruff format --check .` 通過。
 - [ ] `coverage run -m pytest` 全綠，且 `coverage report` 不低於 `fail_under`（目前 75）。
+- [ ] 若動到 `frontend/`：lint、`format:check`、`type-check`、`test:unit` 四道皆綠。
+- [ ] 若動到 API 形狀：`openapi.yaml` 已重新匯出、`typegen` 已重生型別且無殘留 diff。
 - [ ] 新端點 / 模型 / 序列化邏輯或 bug 修復**已附對應測試**（見 [§9](#9-測試要求)）。
 - [ ] commit 訊息符合 Conventional Commits，且**未加 `Co-Authored-By` trailer**。
 - [ ] 需登入端點已標權限類別；業務查詢／寫入皆依 `request.user`。
 - [ ] 金額欄位用 `DecimalField`；無機密被提交進 repo。
 - [ ] 若動到既有共用檔（`accounts/`、`config/` 等），已在 PR 說明原因與影響範圍。
 
-**Merge 條件**：通過至少一位 reviewer 審查。`main` 受保護，不接受直接 push。（自動化 CI 為 roadmap 目標，落地前以本機自檢與人工 review 為準。）
+**Merge 條件**：CI 的 `test` 與 `frontend` 兩道 required check 全綠，且通過 review。`main` 受保護，不接受直接 push；merge 一律用 squash。merge 進 `main` 之後會自動建置 image、部署到線上站並跑部署後煙測（見 [`DEPLOYMENT.md`](DEPLOYMENT.md)）。
 
 ---
 
@@ -195,7 +215,9 @@ chore/42-bump-ruff
   docker compose exec web python manage.py test accounts   # 容器內單一 app
   ```
 
-- 覆蓋率：`coverage report` 觀察 `accounts` / `config`，已啟用 **branch 覆蓋**。已設防倒退地板 **`fail_under = 75`**（baseline≈77.34%）：`coverage report` 低於門檻即非零結束。在 PR 上自動跑覆蓋率的 CI（屬後續 CI pipeline 階段）落地前，請以本機 `coverage report` 自檢，PR **不應使覆蓋率低於門檻**。
+- **前端**：單元測試用 **Vitest**（`@vue/test-utils` + happy-dom），API 一律以 **MSW** 攔截，不打真後端；`npm --prefix frontend run test:unit`。圖表元件是 canvas 薄封裝、不單測，資料轉換全推純函數測——測邏輯不測基建。
+- **端對端**：**Playwright** 煙測只守命脈（註冊 → 建帳戶 → 記一筆 → 列表見到 → 登出），打「已經起好的」棧；`E2E_BASE_URL` 換掉就能打本機容器、CI 或線上站。`npm --prefix frontend run test:e2e`。
+- 覆蓋率：`coverage report` 觀察 `accounts` / `config` / `ledger`，已啟用 **branch 覆蓋**。已設防倒退地板 **`fail_under = 75`**：`coverage report` 低於門檻即非零結束，CI 的 `test` job 用的就是同一個門檻，所以 PR **不應使覆蓋率低於門檻**。
 
 ---
 
