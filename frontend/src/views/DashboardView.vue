@@ -5,7 +5,7 @@ import { api } from '@/api/client'
 import type { components } from '@/api/schema'
 import { loadErrorText } from '@/lib/online'
 import { createDotAssigner } from '@/lib/dots'
-import { formatAmount } from '@/lib/format'
+import { formatAmount, txnDisplayName } from '@/lib/format'
 import Card from '@/components/ui/UiCard.vue'
 import Row from '@/components/ui/UiRow.vue'
 import Amount from '@/components/ui/UiAmount.vue'
@@ -90,11 +90,6 @@ const categoryDots = computed(() => {
   }
   return dots
 })
-
-// 顯示層 fallback：name → category_name → 未命名
-function displayName(txn: Transaction): string {
-  return txn.name || txn.category_name || '未命名'
-}
 
 function goalPercent(goal: SavingsGoalStatus): number {
   const target = Number(goal.goal_amount)
@@ -205,8 +200,12 @@ function goalPercent(goal: SavingsGoalStatus): number {
         >
           <span class="flex min-w-0 items-center gap-1.5">
             <Dot v-if="txn.category" :color="categoryDots.get(txn.category)!" />
-            <span class="truncate">{{ displayName(txn) }}</span>
-            <span v-if="txn.name && txn.category_name" class="text-ink-2 shrink-0">
+            <span class="truncate">{{ txnDisplayName(txn) }}</span>
+            <!-- 分類只在不等於標題時當後綴：標題本身就是分類名時，同一個詞不講兩次 -->
+            <span
+              v-if="txn.category_name && txnDisplayName(txn) !== txn.category_name"
+              class="text-ink-2 shrink-0"
+            >
               · {{ txn.category_name }}
             </span>
             <Badge v-if="txn.source_rule">自動</Badge>

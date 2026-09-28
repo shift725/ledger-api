@@ -1,3 +1,5 @@
+import type { components } from '@/api/schema'
+
 // 金額顯示格式化：契約 decimal 字串 → 千分位字串；不顯示幣別符號（契約無 currency 欄位）。
 // 全程字串處理，不過 Number——金額精度紀律的顯示層落實。
 
@@ -26,4 +28,12 @@ export function accountTypeLabel(type: string): string {
 export function toDatetimeLocal(d: Date): string {
   const p = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+// 交易顯示名稱：名字 → 標籤（以「, 」串接）→ 分類 → 未命名。空標籤 join 成 ''，自然落到下一層。
+// 只用於顯示：表單預填與送出一律用原始 name，否則 fallback 文字會被存成名字。
+export function txnDisplayName(
+  txn: Pick<components['schemas']['Transaction'], 'name' | 'tag_names' | 'category_name'>,
+): string {
+  return txn.name || txn.tag_names.join(', ') || txn.category_name || '未命名'
 }

@@ -115,6 +115,45 @@ describe('DashboardView 五區塊', () => {
     expect(wrapper.find('[data-test="block-recent"]').text()).toContain('午餐')
   })
 
+  it('最近交易：沒填名字時標題用標籤；「· 分類」只在分類不等於標題時出現', async () => {
+    const row = (id: string, name: string, tagNames: string[], categoryName: string) => ({
+      id,
+      account: 'acc-1',
+      account_name: '現金',
+      category: `cat-${id}`,
+      category_name: categoryName,
+      amount: '100.00',
+      type: 'expense',
+      name,
+      description: '',
+      occurred_at: '2026-07-20T08:00:00+08:00',
+      tags: tagNames.map((_, i) => `tag-${id}-${i}`),
+      tag_names: tagNames,
+      source_rule: null,
+      is_transfer: false,
+    })
+    server.use(
+      http.get('*/api/ledger/transactions/', () =>
+        HttpResponse.json({
+          count: 3,
+          next: null,
+          previous: null,
+          results: [
+            row('t1', '', ['早餐', '外食'], '餐飲'), // 標題＝標籤 → 後綴補上分類
+            row('t2', '', [], '薪水'), // 標題＝分類 → 不再講一次
+            row('t3', '交通', [], '交通'), // 名字恰與分類同名 → 不再講一次
+          ],
+        }),
+      ),
+    )
+    const wrapper = await mountDashboard()
+    const recent = () => wrapper.find('[data-test="block-recent"]').text()
+    await vi.waitFor(() => expect(recent()).toContain('早餐, 外食'))
+    expect(recent()).toContain('· 餐飲')
+    expect(recent()).not.toContain('· 薪水')
+    expect(recent()).not.toContain('· 交通')
+  })
+
   it('色點接線：帳戶與交易分類各自 scope 依出現序取色；category null 不顯示色點', async () => {
     const wrapper = await mountDashboard()
     await vi.waitFor(() => expect(wrapper.text()).toContain('現金'))
