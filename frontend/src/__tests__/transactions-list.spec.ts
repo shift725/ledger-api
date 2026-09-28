@@ -181,6 +181,38 @@ describe('TransactionsView — 列項顯示', () => {
     expect(counter.n).toBe(1) // 進頁恰一發
   })
 
+  it('沒填名字但有標籤 → 標題用標籤名以「, 」串接', async () => {
+    server.use(
+      http.get('*/api/ledger/transactions/', () =>
+        HttpResponse.json({
+          count: 1,
+          next: null,
+          previous: null,
+          results: [
+            {
+              id: 'tx',
+              account: 'acc-1',
+              account_name: '現金',
+              category: 'cat-food',
+              category_name: '餐飲',
+              amount: '85.00',
+              type: 'expense',
+              name: '',
+              description: '',
+              occurred_at: '2026-07-20T08:00:00+08:00',
+              tags: ['tag-breakfast', 'tag-eat-out'],
+              tag_names: ['早餐', '外食'],
+              source_rule: null,
+              is_transfer: false,
+            },
+          ],
+        }),
+      ),
+    )
+    const { wrapper } = await mountList(true)
+    expect(wrapper.text()).toContain('早餐, 外食')
+  })
+
   it('is_transfer 交易顯示「轉帳」徽章', async () => {
     server.use(
       http.get('*/api/ledger/transactions/', () =>

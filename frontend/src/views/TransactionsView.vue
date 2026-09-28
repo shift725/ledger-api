@@ -7,6 +7,7 @@ import type { components } from '@/api/schema'
 import { emptyFilterState, parseQuery, toApiParams, toQuery, ORDERINGS } from '@/lib/txnFilters'
 import { useReferenceStore } from '@/stores/reference'
 import { createDotAssigner } from '@/lib/dots'
+import { txnDisplayName } from '@/lib/format'
 import Card from '@/components/ui/UiCard.vue'
 import Row from '@/components/ui/UiRow.vue'
 import Amount from '@/components/ui/UiAmount.vue'
@@ -55,9 +56,6 @@ const categoryDots = computed(() => {
   return dots
 })
 
-function displayName(txn: Transaction): string {
-  return txn.name || txn.category_name || '未命名'
-}
 function displayDate(iso: string): string {
   return new Date(iso).toLocaleDateString('sv-SE') // sv-SE ＝ YYYY-MM-DD
 }
@@ -372,7 +370,7 @@ onBeforeUnmount(() => {
         <Row>
           <span class="flex min-w-0 items-center gap-1.5">
             <Dot v-if="txn.category" :color="categoryDots.get(txn.category)!" />
-            <span class="truncate">{{ displayName(txn) }}</span>
+            <span class="truncate">{{ txnDisplayName(txn) }}</span>
             <Badge v-if="txn.source_rule">自動</Badge>
             <Badge v-if="txn.is_transfer">轉帳</Badge>
           </span>
