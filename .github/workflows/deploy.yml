@@ -182,6 +182,19 @@ jobs:
           echo
           curl --retry 5 --retry-delay 5 --retry-all-errors -fsS -o /dev/null https://shift725-ledger-api.duckdns.org/
 
+      # 備份腳本已隨上面的 scp -r docker 上主機，這裡補它的金鑰與排程——
+      # 主機重建後第一次部署就會裝回來，不必另外記得。
+      # 金鑰獨立成檔：.env 會被 env_file 注入 web/worker/beat，備份金鑰不該進 app 容器。
+      # 排在 smoke 之後：站已確認正常，這步失敗只影響備份，紅燈也看得出是它。
+      # 18:17 UTC＝台北 02:17：在 00:05 的定期定額之後，當天自動產生的交易會進備份；避開整點尖峰。
+      - name: 安裝備份排程
+        env:
+          DEPLOY_BACKUP_ENV: ${{ secrets.DEPLOY_BACKUP_ENV }}
+        run: |
+          test -n "$DEPLOY_BACKUP_ENV"
+          printf '%s\n' "$DEPLOY_BACKUP_ENV" | tr -d '\r' | ssh deploy-target 'umask 077 && cat > /srv/ledger-api/.env.backup && chmod 600 /srv/ledger-api/.env.backup'
+          echo '17 18 * * * bash /srv/ledger-api/docker/backup.sh >> /srv/ledger-api/backup.log 2>&1' | ssh deploy-target crontab -
+
       # 清舊 image 回收磁碟——排在 smoke 之後：smoke 沒過這步不執行，上一顆 image 留主機本地
       # ＝最快的手動回滾窗（正式 rollback 仍走 dispatch 從 GHCR 重拉不可變 sha）。
       - name: 清理主機舊 image

@@ -1,6 +1,6 @@
 # 部署 Runbook — 從零重建整站（裸 VPS → HTTPS 上線）
 
-> 「主機是 cattle」的證明文件：機器全毀，照這條線走一遍就回來。**唯一不可重建的只有 `.env`（密鑰）與 db volume**，其餘全是可拋的。
+> 「主機是 cattle」的證明文件：機器全毀，照這條線走一遍、再還原資料就回來。**唯一不可重建的是資料庫內容**，靠每日異地備份保護（見〈資料備份與還原〉）；`.env` 的密鑰可以重新產生，其餘全是可拋的。
 > 現行實例值（換域名／主機時只改這幾個）：域名 `shift725-ledger-api.duckdns.org`、部署金鑰 `ledger_deploy`、部署目錄 `/srv/ledger-api`、雲商 AWS Lightsail（東京、Ubuntu 24.04 LTS、2 vCPU／2 GB）。
 
 ## 部署拓撲（先看懂形狀）
@@ -77,6 +77,8 @@ printf '{\n  "log-driver": "json-file",\n  "log-opts": { "max-size": "10m", "max
 sudo systemctl restart docker
 # 8 ufw
 sudo ufw allow 22/tcp && sudo ufw allow 80/tcp && sudo ufw allow 443/tcp && sudo ufw enable   # 輸入 y
+# 9 age（備份加密，見〈資料備份與還原〉）
+sudo apt install -y age
 ```
 
 ### ⚠️ Phase 4b — 驗證關卡（鎖門前先確認鑰匙）
@@ -202,7 +204,7 @@ curl -I http://<域名>           # 301
 
 ## GitHub Secrets（啟用自動部署與 rollback 所需）
 
-站手動上線後，設好這 **5 筆 repo Secrets**，此後 push `main` 即自動部署（Deploy workflow：build→push GHCR→SSH pull＋起棧→部署後 smoke）。
+站手動上線後，設好這 **6 筆 repo Secrets**，此後 push `main` 即自動部署（Deploy workflow：build→push GHCR→SSH pull＋起棧→部署後 smoke→安裝備份排程）。
 
 | Secret | 內容 | 來源 |
 |---|---|---|
@@ -211,8 +213,9 @@ curl -I http://<域名>           # 301
 | `DEPLOY_SSH_KEY` | `ledger_deploy` **私鑰全文**（`-----BEGIN…END-----`） | Phase 3 |
 | `DEPLOY_KNOWN_HOSTS` | 主機 SSH 指紋（釘死防 MITM，**絕不** `StrictHostKeyChecking=no`） | 本機 `ssh-keyscan <主機IP>` 的輸出貼上 |
 | `DEPLOY_ENV_FILE` | Phase 5 的 `.env` **全文** | Phase 5 |
+| `DEPLOY_BACKUP_ENV` | 備份金鑰檔 `.env.backup` **全文** | 〈資料備份與還原〉 |
 
-> 密鑰唯一正本自此在 GitHub Secrets；部署時 render `.env` 上機（本 run 另追加 `IMAGE_TAG`）。主機上的 `.env` 是可覆蓋的 cattle（部署會先留一份 `.env.bak` 當救生索）。**任何密鑰都不烤進 image、不進 repo、不進 log。**
+> 密鑰唯一正本自此在 GitHub Secrets；部署時 render `.env` 上機（本 run 另追加 `IMAGE_TAG`）。主機上的 `.env` 是可覆蓋的 cattle（部署會先留一份 `.env.bak` 當救生索）。**任何密鑰都不烤進 image、不進 repo、不進 log。** `DEPLOY_BACKUP_ENV` 沒設時，部署的「安裝備份排程」步驟會收紅，但站已在前面的步驟上線。
 
 ---
 
@@ -229,6 +232,99 @@ curl -I http://<域名>           # 301
 1. 註冊 UptimeRobot（或 healthchecks.io 等）免費帳號。
 2. New Monitor → 型別 HTTP(s) → URL 填 `https://<域名>/healthz` → 間隔 5 分鐘 → 預期 200。
 3. Alert Contact 設 email（站掛即收信）。
+
+---
+
+## 資料備份與還原
+
+資料庫是整站唯一不可重建的東西。每天 18:17 UTC（台北 02:17，在 00:05 的定期定額之後），`deploy` 帳號的 cron 跑 `docker/backup.sh`：
+
+1. `pg_dump -Fc` 匯出。
+2. 完整讀過一次，確認沒有截斷或損毀、裡面有交易表（`pg_restore --list` 只讀目錄，實測抓不到這些）。
+3. 用 `age` 公鑰加密。主機沒有私鑰，自己也解不開這份備份。
+4. 上傳到 Backblaze B2，用 Write Only 金鑰：讀不到備份、列不出檔名，也無法永久刪除特定版本。
+5. 成功才 ping healthchecks.io。收不到就告警，所以「跑到一半失敗」和「cron 根本沒跑」都會通知。
+
+Lightsail 自動快照是可選的第二道：還原快，但只留 7 份、和主機同一個 AWS 帳號，刪主機時也會一起刪，所以不能取代上面這條。
+
+備份保留約 13 個月，因為帳務錯誤常到對帳才發現，而備份檔很小。最多可能遺失 24 小時的資料。
+
+**已知限制**：Write Only 金鑰實測可以依檔名隱藏檔案。隱藏的版本仍會保留，但只要過了 30 天鎖定期、又隱藏滿 30 天，就會被 lifecycle 清掉。懷疑主機被入侵時，先到 B2 撤銷這把金鑰，再檢查有沒有被隱藏的檔案。
+
+### 首次設定（手動）
+
+1. **Backblaze B2**：建私人 bucket，建立時開 Object Lock，預設保留 30 天。Lifecycle 用自訂規則：前綴 `db/`、上傳後 365 天隱藏、隱藏後 30 天刪除（前綴一定要填，空白可能清掉整個 bucket）。建 application key：限這個 bucket、Write Only。
+2. **age 金鑰**（在自己電腦，不在主機）：`age-keygen -o ledger-backup.key`。私鑰存進密碼管理器，弄丟等於全部備份作廢；印出的公鑰（`age1…`）填進下面的設定。
+3. **healthchecks.io**：建 check，週期 1 天、寬限 3 小時，設 email 告警並按測試通知。
+4. **GitHub Secret `DEPLOY_BACKUP_ENV`**，內容如下。下次部署會把它寫成 `/srv/ledger-api/.env.backup`（權限 600）並安裝 crontab。金鑰獨立成檔，因為 `.env` 會被注入 web／worker／beat。
+
+   ```bash
+   B2_KEY_ID=<application key ID>
+   B2_APP_KEY=<application key>
+   B2_BUCKET=<bucket 名稱>
+   B2_REGION=<endpoint 中間那段，如 us-east-005>
+   AGE_RECIPIENT=<age1… 公鑰>
+   HC_PING_URL=<healthchecks 的 ping URL>
+   ```
+
+5. **Lightsail**（可選）：在 instance 的 Snapshots 頁開自動快照。
+
+### 日常
+
+- **手動備份一次**（跑資料修正腳本之類會動到資料的操作之前）：主機執行 `bash /srv/ledger-api/docker/backup.sh`。
+- **紀錄**：`tail /srv/ledger-api/backup.log`，每次成功一行。
+- **找備份**：B2 的 Browse Files，`db/` 底下，檔名含主機名與 UTC 時間；主機名不是正式主機的是測試檔。
+
+### 還原
+
+**流程是還原到新資料庫、驗過再改名切換，舊資料庫留著。** 別把備份直接灌進現有資料庫：`psql` 遇到錯誤會繼續跑並回傳 0，實測被改壞的資料還是壞的。
+
+整站全毀時，先照上面 Phase 1–6 起好站（此時資料庫是空的），再走同一條。
+
+自己電腦，從 B2 下載備份後解密並傳上主機。二進位檔只用 `scp`，別經過 PowerShell 的管線或重導（會損毀）：
+
+```bash
+age -d -i <私鑰檔> -o ledger.dump <檔名>.dump.age
+scp -i ~/.ssh/ledger_deploy ledger.dump deploy@<主機IP>:/srv/ledger-api/
+```
+
+主機，以 `deploy`：
+
+```bash
+cd /srv/ledger-api
+dc() { docker compose -f docker-compose.yml -f docker-compose.prod.yml "$@"; }
+dc stop web worker beat
+dc exec -T db sh -c 'createdb -U "$POSTGRES_USER" ledger_restore'
+dc exec -T db sh -c 'pg_restore -U "$POSTGRES_USER" -d ledger_restore --no-owner --single-transaction --exit-on-error' < ledger.dump
+# 驗證：筆數合理才往下。
+dc exec -T db sh -c 'psql -U "$POSTGRES_USER" -d ledger_restore -Atc "select count(*) from ledger_transaction"'
+# 切換：要改名的資料庫不能有連線，所以上面先停 web／worker／beat。
+dc exec -T db sh -c 'psql -U "$POSTGRES_USER" -d postgres -c "alter database $POSTGRES_DB rename to ledger_broken" -c "alter database ledger_restore rename to $POSTGRES_DB"'
+# 重新起棧：entrypoint 會補跑備份之後新增的 migration。
+dc up -d --no-build --wait --wait-timeout 300
+rm ledger.dump
+```
+
+登入站上確認資料正確後，才刪舊資料庫：
+
+```bash
+dc exec -T db sh -c 'dropdb -U "$POSTGRES_USER" ledger_broken'
+```
+
+### 演練（每季一次）
+
+沒還原過的備份不算備份。在自己電腦跑，不碰正式環境：
+
+```bash
+docker run -d --rm --name restore-drill -e POSTGRES_USER=ledger -e POSTGRES_PASSWORD=x -e POSTGRES_DB=ledger postgres:16-alpine
+docker exec restore-drill sh -c 'until pg_isready -q -h 127.0.0.1 -U ledger; do sleep 1; done'
+docker cp ledger.dump restore-drill:/tmp/ledger.dump
+docker exec restore-drill pg_restore -U ledger -d ledger --no-owner --single-transaction --exit-on-error /tmp/ledger.dump
+docker exec restore-drill psql -U ledger -d ledger -Atc "select count(*) from ledger_transaction"
+docker rm -f restore-drill
+```
+
+筆數要和站上一致。用完刪掉解密後的 `ledger.dump`。Git Bash 下先執行 `export MSYS_NO_PATHCONV=1`，否則 `/tmp/…` 會被改寫成 Windows 路徑。
 
 ---
 
@@ -249,17 +345,12 @@ IMAGE_TAG=sha-<舊commit> docker compose -f docker-compose.yml -f docker-compose
 
 **換域名**：改 `.env` 的 `DOMAIN_NAME`／`ALLOWED_HOSTS`／`CSRF_TRUSTED_ORIGINS`（同步更新 GitHub Secret `DEPLOY_ENV_FILE`）＋DNS 指過來＋重跑 Phase 6 簽一張新證。零程式碼返工。
 
-**DB 備份／還原**（手動一次性）：
-
-```bash
-docker compose exec -T db pg_dump -U ledger ledger > backup-$(date +%F).sql   # 備份
-docker compose exec -T db psql   -U ledger ledger < backup.sql                # 還原
-```
+**DB 備份／還原**：見〈資料備份與還原〉。
 
 ---
 
 ## 一頁速記（順序）
 
-1 VPS（東京／Ubuntu／2 GB／靜態 IP／**console 開 443**）→ 2 DNS → 3 本機產金鑰 → 4 主機 init（含 docker 官方源、**驗證關卡、cloud-init 加固陷阱**）→ 5 scp＋`.env`（**ALLOWED_HOSTS 含 localhost**）→ 6 憑證（**dummy→staging→正式→reload**）→ 7 驗收 → 設 GitHub Secrets（自動部署上線）→ 監測。
+1 VPS（東京／Ubuntu／2 GB／靜態 IP／**console 開 443**）→ 2 DNS → 3 本機產金鑰 → 4 主機 init（含 docker 官方源、**驗證關卡、cloud-init 加固陷阱**）→ 5 scp＋`.env`（**ALLOWED_HOSTS 含 localhost**）→ 6 憑證（**dummy→staging→正式→reload**）→ 7 驗收 → 設備份（B2＋age＋healthchecks）→ 設 GitHub Secrets（自動部署上線，含備份排程）→ 監測 → 有舊資料就還原。
 
-唯一不可重建的：`.env`（密鑰）＋db volume。其餘全是 cattle。
+唯一不可重建的：資料庫內容，靠每日異地備份。其餘全是 cattle。
