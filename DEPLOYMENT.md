@@ -320,11 +320,14 @@ docker run -d --rm --name restore-drill -e POSTGRES_USER=ledger -e POSTGRES_PASS
 docker exec restore-drill sh -c 'until pg_isready -q -h 127.0.0.1 -U ledger; do sleep 1; done'
 docker cp ledger.dump restore-drill:/tmp/ledger.dump
 docker exec restore-drill pg_restore -U ledger -d ledger --no-owner --single-transaction --exit-on-error /tmp/ledger.dump
-docker exec restore-drill psql -U ledger -d ledger -Atc "select count(*) from ledger_transaction"
+docker exec restore-drill psql -U ledger -d ledger -Atc "select count(*), max(t.occurred_at) from ledger_transaction t join accounts_customuser u on u.id = t.user_id where u.email = '<登入 email>'"
+docker exec restore-drill psql -U ledger -d ledger -Atc "select a.name, a.balance from ledger_account a join accounts_customuser u on u.id = a.user_id where u.email = '<登入 email>' order by a.name"
 docker rm -f restore-drill
 ```
 
-筆數要和站上一致。用完刪掉解密後的 `ledger.dump`。Git Bash 下先執行 `export MSYS_NO_PATHCONV=1`，否則 `/tmp/…` 會被改寫成 Windows 路徑。
+餘額要和站上總覽一致，最新交易時間要和站上最新一筆一致（這裡顯示 UTC，台北時間要加 8 小時）；備份之後新記的帳不會在裡面。別比全表筆數：其他帳號的交易也在同一張表裡。
+
+用完刪掉解密後的 `ledger.dump`。Git Bash 下先執行 `export MSYS_NO_PATHCONV=1`，否則 `/tmp/…` 會被改寫成 Windows 路徑。
 
 ---
 
